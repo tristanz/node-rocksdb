@@ -50,6 +50,7 @@ Env* AutoRollLoggerTest::env = Env::Default();
 // no format. LogMessage() provides such a simple interface and
 // avoids the [format-security] warning which occurs when you
 // call Log(logger, log_message) directly.
+namespace {
 void LogMessage(Logger* logger, const char* message) {
   Log(logger, "%s", message);
 }
@@ -58,7 +59,9 @@ void LogMessage(const InfoLogLevel log_level, Logger* logger,
                 const char* message) {
   Log(log_level, logger, "%s", message);
 }
+}  // namespace
 
+namespace {
 void GetFileCreateTime(const std::string& fname, uint64_t* file_ctime) {
   struct stat s;
   if (stat(fname.c_str(), &s) != 0) {
@@ -66,11 +69,12 @@ void GetFileCreateTime(const std::string& fname, uint64_t* file_ctime) {
   }
   *file_ctime = static_cast<uint64_t>(s.st_ctime);
 }
+}  // namespace
 
 void AutoRollLoggerTest::RollLogFileBySizeTest(AutoRollLogger* logger,
                                                size_t log_max_size,
                                                const string& log_message) {
-  logger->SetInfoLogLevel(InfoLogLevel::INFO);
+  logger->SetInfoLogLevel(InfoLogLevel::INFO_LEVEL);
   // measure the size of each message, which is supposed
   // to be equal or greater than log_message.size()
   LogMessage(logger, log_message.c_str());
@@ -197,7 +201,7 @@ TEST(AutoRollLoggerTest, CompositeRollByTimeAndSizeLogger) {
 }
 
 TEST(AutoRollLoggerTest, CreateLoggerFromOptions) {
-  Options options;
+  DBOptions options;
   shared_ptr<Logger> logger;
 
   // Normal logger
@@ -250,19 +254,19 @@ TEST(AutoRollLoggerTest, InfoLogLevel) {
   // becomes out of scope.
   {
     AutoRollLogger logger(Env::Default(), kTestDir, "", log_size, 0);
-    for (int log_level = InfoLogLevel::FATAL; log_level >= InfoLogLevel::DEBUG;
-         log_level--) {
+    for (int log_level = InfoLogLevel::FATAL_LEVEL;
+         log_level >= InfoLogLevel::DEBUG_LEVEL; log_level--) {
       logger.SetInfoLogLevel((InfoLogLevel)log_level);
-      for (int log_type = InfoLogLevel::DEBUG; log_type <= InfoLogLevel::FATAL;
-           log_type++) {
+      for (int log_type = InfoLogLevel::DEBUG_LEVEL;
+           log_type <= InfoLogLevel::FATAL_LEVEL; log_type++) {
         // log messages with log level smaller than log_level will not be
         // logged.
         LogMessage((InfoLogLevel)log_type, &logger, kSampleMessage.c_str());
       }
-      log_lines += InfoLogLevel::FATAL - log_level + 1;
+      log_lines += InfoLogLevel::FATAL_LEVEL - log_level + 1;
     }
-    for (int log_level = InfoLogLevel::FATAL; log_level >= InfoLogLevel::DEBUG;
-         log_level--) {
+    for (int log_level = InfoLogLevel::FATAL_LEVEL;
+         log_level >= InfoLogLevel::DEBUG_LEVEL; log_level--) {
       logger.SetInfoLogLevel((InfoLogLevel)log_level);
 
       // again, messages with level smaller than log_level will not be logged.
@@ -271,7 +275,7 @@ TEST(AutoRollLoggerTest, InfoLogLevel) {
       Warn(&logger, "%s", kSampleMessage.c_str());
       Error(&logger, "%s", kSampleMessage.c_str());
       Fatal(&logger, "%s", kSampleMessage.c_str());
-      log_lines += InfoLogLevel::FATAL - log_level + 1;
+      log_lines += InfoLogLevel::FATAL_LEVEL - log_level + 1;
     }
   }
   std::ifstream inFile(AutoRollLoggerTest::kLogFile.c_str());
@@ -279,26 +283,6 @@ TEST(AutoRollLoggerTest, InfoLogLevel) {
                          std::istreambuf_iterator<char>(), '\n');
   ASSERT_EQ(log_lines, lines);
   inFile.close();
-}
-
-int OldLogFileCount(const string& dir) {
-  std::vector<std::string> files;
-  Env::Default()->GetChildren(dir, &files);
-  int log_file_count = 0;
-
-  for (std::vector<std::string>::iterator it = files.begin();
-       it != files.end(); ++it) {
-    uint64_t create_time;
-    FileType type;
-    if (!ParseFileName(*it, &create_time, &type)) {
-      continue;
-    }
-    if (type == kInfoLogFile && create_time > 0) {
-      ++log_file_count;
-    }
-  }
-
-  return log_file_count;
 }
 
 }  // namespace rocksdb

@@ -63,7 +63,7 @@ class BlockBasedTable : public TableReader {
                      unique_ptr<RandomAccessFile>&& file, uint64_t file_size,
                      unique_ptr<TableReader>* table_reader);
 
-  bool PrefixMayMatch(const Slice& internal_prefix) override;
+  bool PrefixMayMatch(const Slice& internal_key);
 
   // Returns a new iterator over the table contents.
   // The result of NewIterator() is initially invalid (caller must
@@ -111,13 +111,9 @@ class BlockBasedTable : public TableReader {
   Rep* rep_;
   bool compaction_optimized_;
 
-  static Iterator* DataBlockReader(void*, const ReadOptions&,
-                                   const EnvOptions& soptions,
-                                   const InternalKeyComparator& icomparator,
-                                   const Slice&, bool for_compaction);
-
-  static Iterator* DataBlockReader(void*, const ReadOptions&, const Slice&,
-                                   bool* didIO, bool for_compaction = false);
+  class BlockEntryIteratorState;
+  static Iterator* NewDataBlockIterator(Rep* rep, const ReadOptions& ro,
+      bool* didIO, const Slice& index_value);
 
   // For the following two functions:
   // if `no_io == true`, we will not try to read filter/index from sst file
@@ -132,7 +128,7 @@ class BlockBasedTable : public TableReader {
   //  2. index is not present in block cache.
   //  3. We disallowed any io to be performed, that is, read_options ==
   //     kBlockCacheTier
-  Iterator* NewIndexIterator(const ReadOptions& read_options) const;
+  Iterator* NewIndexIterator(const ReadOptions& read_options);
 
   // Read block cache from block caches (if set): block_cache and
   // block_cache_compressed.
@@ -164,8 +160,13 @@ class BlockBasedTable : public TableReader {
   friend class BlockBasedTableBuilder;
 
   void ReadMeta(const Footer& footer);
-  void ReadFilter(const Slice& filter_handle_value);
-  Status CreateIndexReader(IndexReader** index_reader) const;
+
+  // Create a index reader based on the index type stored in the table.
+  // Optionally, user can pass a preloaded meta_index_iter for the index that
+  // need to access extra meta blocks for index construction. This parameter
+  // helps avoid re-reading meta index block if caller already created one.
+  Status CreateIndexReader(IndexReader** index_reader,
+                           Iterator* preloaded_meta_index_iter = nullptr);
 
   // Read the meta block from sst.
   static Status ReadMetaBlock(
@@ -174,10 +175,8 @@ class BlockBasedTable : public TableReader {
       std::unique_ptr<Iterator>* iter);
 
   // Create the filter from the filter block.
-  static FilterBlockReader* ReadFilter(
-      const Slice& filter_handle_value,
-      Rep* rep,
-      size_t* filter_size = nullptr);
+  static FilterBlockReader* ReadFilter(const BlockHandle& filter_handle,
+                                       Rep* rep, size_t* filter_size = nullptr);
 
   static void SetupCacheKeyPrefix(Rep* rep);
 
@@ -198,9 +197,5 @@ class BlockBasedTable : public TableReader {
   explicit BlockBasedTable(const TableReader&) = delete;
   void operator=(const TableReader&) = delete;
 };
-
-// Backward compatible properties block name. Limited in block based
-// table.
-extern const std::string kPropertiesBlockOldName;
 
 }  // namespace rocksdb

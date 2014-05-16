@@ -4,6 +4,7 @@
 //  of patent rights can be found in the PATENTS file in the same directory.
 
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 #include <memory>
 
@@ -145,6 +146,7 @@ class SanityTestPlainTableFactory : public SanityTest {
   Options options_;
 };
 
+namespace {
 bool RunSanityTests(const std::string& command, const std::string& path) {
   std::vector<SanityTest*> sanity_tests = {
       new SanityTestBasic(path),
@@ -176,6 +178,7 @@ bool RunSanityTests(const std::string& command, const std::string& path) {
   }
   return true;
 }
+}  // namespace
 
 }  // namespace rocksdb
 

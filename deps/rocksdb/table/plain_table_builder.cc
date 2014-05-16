@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#ifndef ROCKSDB_LITE
 #include "table/plain_table_builder.h"
 
 #include <assert.h>
@@ -46,9 +47,10 @@ Status WriteBlock(
 }  // namespace
 
 // kPlainTableMagicNumber was picked by running
-//    echo rocksdb.plain.table | sha1sum
+//    echo rocksdb.table.plain | sha1sum
 // and taking the leading 64 bits.
-extern const uint64_t kPlainTableMagicNumber = 0x4f3418eb7a8f13b8ull;
+extern const uint64_t kPlainTableMagicNumber = 0x8242229663bf9564ull;
+extern const uint64_t kLegacyPlainTableMagicNumber = 0x4f3418eb7a8f13b8ull;
 
 PlainTableBuilder::PlainTableBuilder(const Options& options,
                                      WritableFile* file,
@@ -63,6 +65,12 @@ PlainTableBuilder::PlainTableBuilder(const Options& options,
   properties_.index_size = 0;
   properties_.filter_size = 0;
   properties_.format_version = 0;
+
+  for (auto& collector_factories :
+       options.table_properties_collector_factories) {
+    table_properties_collectors_.emplace_back(
+        collector_factories->CreateTablePropertiesCollector());
+  }
 }
 
 PlainTableBuilder::~PlainTableBuilder() {
@@ -74,10 +82,12 @@ void PlainTableBuilder::Add(const Slice& key, const Slice& value) {
 
   if (!IsFixedLength()) {
     // Write key length
-    key_size_str_.clear();
-    PutVarint32(&key_size_str_, user_key_size);
-    file_->Append(key_size_str_);
-    offset_ += key_size_str_.length();
+    char key_size_buf[5];  // tmp buffer for key size as varint32
+    char* ptr = EncodeVarint32(key_size_buf, user_key_size);
+    assert(ptr <= key_size_buf + sizeof(key_size_buf));
+    auto len = ptr - key_size_buf;
+    file_->Append(Slice(key_size_buf, len));
+    offset_ += len;
   }
 
   // Write key
@@ -86,37 +96,40 @@ void PlainTableBuilder::Add(const Slice& key, const Slice& value) {
     status_ = Status::Corruption(Slice());
     return;
   }
+  // For value size as varint32 (up to 5 bytes).
+  // If the row is of value type with seqId 0, flush the special flag together
+  // in this buffer to safe one file append call, which takes 1 byte.
+  char value_size_buf[6];
+  size_t value_size_buf_size = 0;
   if (parsed_key.sequence == 0 && parsed_key.type == kTypeValue) {
     file_->Append(Slice(key.data(), user_key_size));
-    char tmp_char = PlainTableFactory::kValueTypeSeqId0;
-    file_->Append(Slice(&tmp_char, 1));
-    offset_ += key.size() - 7;
+    offset_ += user_key_size;
+    value_size_buf[0] = PlainTableFactory::kValueTypeSeqId0;
+    value_size_buf_size = 1;
   } else {
     file_->Append(key);
     offset_ += key.size();
   }
 
   // Write value length
-  value_size_str_.clear();
   int value_size = value.size();
-  PutVarint32(&value_size_str_, value_size);
-  file_->Append(value_size_str_);
+  char* end_ptr =
+      EncodeVarint32(value_size_buf + value_size_buf_size, value_size);
+  assert(end_ptr <= value_size_buf + sizeof(value_size_buf));
+  value_size_buf_size = end_ptr - value_size_buf;
+  file_->Append(Slice(value_size_buf, value_size_buf_size));
 
   // Write value
   file_->Append(value);
-  offset_ += value_size + value_size_str_.length();
+  offset_ += value_size + value_size_buf_size;
 
   properties_.num_entries++;
   properties_.raw_key_size += key.size();
   properties_.raw_value_size += value.size();
 
   // notify property collectors
-  NotifyCollectTableCollectorsOnAdd(
-      key,
-      value,
-      options_.table_properties_collectors,
-      options_.info_log.get()
-  );
+  NotifyCollectTableCollectorsOnAdd(key, value, table_properties_collectors_,
+                                    options_.info_log.get());
 }
 
 Status PlainTableBuilder::status() const { return status_; }
@@ -138,11 +151,9 @@ Status PlainTableBuilder::Finish() {
   property_block_builder.AddTableProperty(properties_);
 
   // -- Add user collected properties
-  NotifyCollectTableCollectorsOnFinish(
-      options_.table_properties_collectors,
-      options_.info_log.get(),
-      &property_block_builder
-  );
+  NotifyCollectTableCollectorsOnFinish(table_properties_collectors_,
+                                       options_.info_log.get(),
+                                       &property_block_builder);
 
   // -- Write property block
   BlockHandle property_block_handle;
@@ -170,7 +181,8 @@ Status PlainTableBuilder::Finish() {
   }
 
   // Write Footer
-  Footer footer(kPlainTableMagicNumber);
+  // no need to write out new footer if we're using default checksum
+  Footer footer(kLegacyPlainTableMagicNumber);
   footer.set_metaindex_handle(metaindex_block_handle);
   footer.set_index_handle(BlockHandle::NullBlockHandle());
   std::string footer_encoding;
@@ -196,3 +208,4 @@ uint64_t PlainTableBuilder::FileSize() const {
 }
 
 }  // namespace rocksdb
+#endif  // ROCKSDB_LITE

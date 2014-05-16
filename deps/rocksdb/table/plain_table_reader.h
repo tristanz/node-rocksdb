@@ -3,6 +3,8 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 #pragma once
+
+#ifndef ROCKSDB_LITE
 #include <unordered_map>
 #include <memory>
 #include <vector>
@@ -17,6 +19,7 @@
 #include "rocksdb/table_properties.h"
 #include "table/table_reader.h"
 #include "table/plain_table_factory.h"
+#include "util/arena.h"
 
 namespace rocksdb {
 
@@ -50,9 +53,7 @@ class PlainTableReader: public TableReader {
                      unique_ptr<RandomAccessFile>&& file, uint64_t file_size,
                      unique_ptr<TableReader>* table,
                      const int bloom_bits_per_key, double hash_table_ratio,
-                     size_t index_sparseness);
-
-  bool PrefixMayMatch(const Slice& internal_prefix);
+                     size_t index_sparseness, size_t huge_page_tlb_size);
 
   Iterator* NewIterator(const ReadOptions&);
 
@@ -74,7 +75,8 @@ class PlainTableReader: public TableReader {
                    const InternalKeyComparator& internal_comparator,
                    uint64_t file_size, int bloom_num_bits,
                    double hash_table_ratio, size_t index_sparseness,
-                   const TableProperties* table_properties);
+                   const TableProperties* table_properties,
+                   size_t huge_page_tlb_size);
   virtual ~PlainTableReader();
 
  protected:
@@ -85,6 +87,9 @@ class PlainTableReader: public TableReader {
 
   // PopulateIndex() builds index of keys. It must be called before any query
   // to the table.
+  //
+  // props: the table properties object that need to be stored. Ownership of
+  //        the object will be passed.
   //
   // index_ contains buckets size of index_size_, each is a
   // 32-bit integer. The lower 31 bits contain an offset value (explained below)
@@ -121,7 +126,7 @@ class PlainTableReader: public TableReader {
   //    ....
   //   record N file offset:  fixedint32
   // <end>
-  Status PopulateIndex();
+  Status PopulateIndex(TableProperties* props);
 
  private:
   struct IndexRecord;
@@ -133,9 +138,9 @@ class PlainTableReader: public TableReader {
   // For more details about the in-memory index, please refer to:
   // https://github.com/facebook/rocksdb/wiki/PlainTable-Format
   // #wiki-in-memory-index-format
-  std::unique_ptr<uint32_t[]> index_;
+  uint32_t* index_;
   int index_size_ = 0;
-  std::unique_ptr<char[]> sub_index_;
+  char* sub_index_;
 
   Options options_;
   const EnvOptions& soptions_;
@@ -156,6 +161,7 @@ class PlainTableReader: public TableReader {
   const size_t kIndexIntervalForSamePrefixKeys = 16;
   // Bloom filter is used to rule out non-existent key
   unique_ptr<DynamicBloom> bloom_;
+  Arena arena_;
 
   std::shared_ptr<const TableProperties> table_properties_;
   // data_start_offset_ and data_end_offset_ defines the range of the
@@ -163,6 +169,7 @@ class PlainTableReader: public TableReader {
   const uint32_t data_start_offset_ = 0;
   const uint32_t data_end_offset_;
   const size_t user_key_len_;
+  const size_t huge_page_tlb_size_;
 
   static const size_t kNumInternalBytes = 8;
   static const uint32_t kSubIndexMask = 0x80000000;
@@ -255,3 +262,4 @@ class PlainTableReader: public TableReader {
   void operator=(const TableReader&) = delete;
 };
 }  // namespace rocksdb
+#endif  // ROCKSDB_LITE

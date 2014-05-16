@@ -8,13 +8,17 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 #pragma once
-#include "utilities/stackable_db.h"
-#include "rocksdb/env.h"
-#include "rocksdb/status.h"
+#ifndef ROCKSDB_LITE
 
+#define __STDC_FORMAT_MACROS
+#include <inttypes.h>
 #include <string>
 #include <map>
 #include <vector>
+
+#include "utilities/stackable_db.h"
+#include "rocksdb/env.h"
+#include "rocksdb/status.h"
 
 namespace rocksdb {
 
@@ -71,6 +75,14 @@ struct BackupableDBOptions {
   // Default: 0
   uint64_t restore_rate_limit;
 
+  // Only used if share_table_files is set to true. If true, will consider that
+  // backups can come from different databases, hence a sst is not uniquely
+  // identifed by its name, but by the triple (file name, crc32, file length)
+  // Default: false
+  // Note: this is an experimental option, and you'll need to set it manually
+  // *turn it on only if you know what you're doing*
+  bool share_files_with_checksum;
+
   void Dump(Logger* logger) const;
 
   explicit BackupableDBOptions(const std::string& _backup_dir,
@@ -89,7 +101,10 @@ struct BackupableDBOptions {
         destroy_old_data(_destroy_old_data),
         backup_log_files(_backup_log_files),
         backup_rate_limit(_backup_rate_limit),
-        restore_rate_limit(_restore_rate_limit) {}
+        restore_rate_limit(_restore_rate_limit),
+        share_files_with_checksum(false) {
+    assert(share_table_files || !share_files_with_checksum);
+  }
 };
 
 struct RestoreOptions {
@@ -114,6 +129,29 @@ struct BackupInfo {
   BackupInfo() {}
   BackupInfo(BackupID _backup_id, int64_t _timestamp, uint64_t _size)
       : backup_id(_backup_id), timestamp(_timestamp), size(_size) {}
+};
+
+class BackupEngineReadOnly {
+ public:
+  virtual ~BackupEngineReadOnly() {}
+
+  static BackupEngineReadOnly* NewReadOnlyBackupEngine(
+      Env* db_env, const BackupableDBOptions& options);
+
+  // You can GetBackupInfo safely, even with other BackupEngine performing
+  // backups on the same directory
+  virtual void GetBackupInfo(std::vector<BackupInfo>* backup_info) = 0;
+
+  // Restoring DB from backup is NOT safe when there is another BackupEngine
+  // running that might call DeleteBackup() or PurgeOldBackups(). It is caller's
+  // responsibility to synchronize the operation, i.e. don't delete the backup
+  // when you're restoring from it
+  virtual Status RestoreDBFromBackup(
+      BackupID backup_id, const std::string& db_dir, const std::string& wal_dir,
+      const RestoreOptions& restore_options = RestoreOptions()) = 0;
+  virtual Status RestoreDBFromLatestBackup(
+      const std::string& db_dir, const std::string& wal_dir,
+      const RestoreOptions& restore_options = RestoreOptions()) = 0;
 };
 
 // Please see the documentation in BackupableDB and RestoreBackupableDB
@@ -209,4 +247,5 @@ class RestoreBackupableDB {
   BackupEngine* backup_engine_;
 };
 
-} // rocksdb namespace
+}  // namespace rocksdb
+#endif  // ROCKSDB_LITE

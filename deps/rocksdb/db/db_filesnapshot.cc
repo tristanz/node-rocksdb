@@ -7,6 +7,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#ifndef ROCKSDB_LITE
+
 #define __STDC_FORMAT_MACROS
 #include <inttypes.h>
 #include <algorithm>
@@ -63,21 +65,36 @@ Status DBImpl::GetLiveFiles(std::vector<std::string>& ret,
 
   *manifest_file_size = 0;
 
+  mutex_.Lock();
+
   if (flush_memtable) {
     // flush all dirty data to disk.
-    Status status =  Flush(FlushOptions());
+    Status status;
+    for (auto cfd : *versions_->GetColumnFamilySet()) {
+      cfd->Ref();
+      mutex_.Unlock();
+      status = FlushMemTable(cfd, FlushOptions());
+      mutex_.Lock();
+      cfd->Unref();
+      if (!status.ok()) {
+        break;
+      }
+    }
+    versions_->GetColumnFamilySet()->FreeDeadColumnFamilies();
+
     if (!status.ok()) {
+      mutex_.Unlock();
       Log(options_.info_log, "Cannot Flush data %s\n",
           status.ToString().c_str());
       return status;
     }
   }
 
-  MutexLock l(&mutex_);
-
   // Make a set of all of the live *.sst files
   std::set<uint64_t> live;
-  versions_->current()->AddLiveFiles(&live);
+  for (auto cfd : *versions_->GetColumnFamilySet()) {
+    cfd->current()->AddLiveFiles(&live);
+  }
 
   ret.clear();
   ret.reserve(live.size() + 2); //*.sst + CURRENT + MANIFEST
@@ -94,6 +111,7 @@ Status DBImpl::GetLiveFiles(std::vector<std::string>& ret,
   // find length of manifest file while holding the mutex lock
   *manifest_file_size = versions_->ManifestFileSize();
 
+  mutex_.Unlock();
   return Status::OK();
 }
 
@@ -150,3 +168,5 @@ Status DBImpl::GetSortedWalFiles(VectorLogPtr& files) {
 }
 
 }
+
+#endif  // ROCKSDB_LITE

@@ -13,7 +13,7 @@
 #include <deque>
 #include "db/dbformat.h"
 #include "db/skiplist.h"
-#include "db/version_set.h"
+#include "db/version_edit.h"
 #include "rocksdb/db.h"
 #include "rocksdb/memtablerep.h"
 #include "util/arena.h"
@@ -39,7 +39,7 @@ class MemTable {
   // MemTables are reference counted.  The initial reference count
   // is zero and the caller must call Ref() at least once.
   explicit MemTable(const InternalKeyComparator& comparator,
-                    const Options& options = Options());
+                    const Options& options);
 
   ~MemTable();
 
@@ -75,14 +75,10 @@ class MemTable {
   // iterator are internal keys encoded by AppendInternalKey in the
   // db/dbformat.{h,cc} module.
   //
-  // If options.prefix is supplied, it is passed to the underlying MemTableRep
-  // as a hint that the iterator only need to support access to keys with that
-  // specific prefix.
-  // If options.prefix is not supplied and options.prefix_seek is set, the
-  // iterator is not bound to a specific prefix. However, the semantics of
-  // Seek is changed - the result might only include keys with the same prefix
-  // as the seek-key.
-  Iterator* NewIterator(const ReadOptions& options = ReadOptions());
+  // By default, it returns an iterator for prefix seek if prefix_extractor
+  // is configured in Options.
+  Iterator* NewIterator(const ReadOptions& options,
+                        bool enforce_total_order = false);
 
   // Add an entry into memtable that maps key to value at the
   // specified sequence number and with the specified type.
@@ -132,6 +128,9 @@ class MemTable {
   // key in the memtable.
   size_t CountSuccessiveMergeEntries(const LookupKey& key);
 
+  // Get total number of entries in the mem table.
+  uint64_t GetNumEntries() const { return num_entries_; }
+
   // Returns the edits area that is needed for flushing the memtable
   VersionEdit* GetEdits() { return &edit_; }
 
@@ -147,16 +146,16 @@ class MemTable {
   // be flushed to storage
   void SetNextLogNumber(uint64_t num) { mem_next_logfile_number_ = num; }
 
-  // Returns the logfile number that can be safely deleted when this
-  // memstore is flushed to storage
-  uint64_t GetLogNumber() { return mem_logfile_number_; }
-
-  // Sets the logfile number that can be safely deleted when this
-  // memstore is flushed to storage
-  void SetLogNumber(uint64_t num) { mem_logfile_number_ = num; }
-
   // Notify the underlying storage that no more items will be added
   void MarkImmutable() { table_->MarkReadOnly(); }
+
+  // return true if the current MemTableRep supports merge operator.
+  bool IsMergeOperatorSupported() const {
+    return table_->IsMergeOperatorSupported();
+  }
+
+  // return true if the current MemTableRep supports snapshots.
+  bool IsSnapshotSupported() const { return table_->IsSnapshotSupported(); }
 
   // Get the lock associated for the key
   port::RWMutex* GetLock(const Slice& key);
@@ -182,6 +181,8 @@ class MemTable {
   Arena arena_;
   unique_ptr<MemTableRep> table_;
 
+  uint64_t num_entries_;
+
   // These are used to manage memtable flushes to storage
   bool flush_in_progress_; // started the flush
   bool flush_completed_;   // finished the flush
@@ -196,10 +197,6 @@ class MemTable {
 
   // The log files earlier than this number can be deleted.
   uint64_t mem_next_logfile_number_;
-
-  // The log file that backs this memtable (to be deleted when
-  // memtable flush is done)
-  uint64_t mem_logfile_number_;
 
   // rw locks for inplace updates
   std::vector<port::RWMutex> locks_;

@@ -96,12 +96,11 @@ void LogPropertiesCollectionError(
 }
 
 bool NotifyCollectTableCollectorsOnAdd(
-    const Slice& key,
-    const Slice& value,
-    const Options::TablePropertiesCollectors& collectors,
+    const Slice& key, const Slice& value,
+    const std::vector<std::unique_ptr<TablePropertiesCollector>>& collectors,
     Logger* info_log) {
   bool all_succeeded = true;
-  for (auto collector : collectors) {
+  for (auto& collector : collectors) {
     Status s = collector->Add(key, value);
     all_succeeded = all_succeeded && s.ok();
     if (!s.ok()) {
@@ -113,11 +112,10 @@ bool NotifyCollectTableCollectorsOnAdd(
 }
 
 bool NotifyCollectTableCollectorsOnFinish(
-    const Options::TablePropertiesCollectors& collectors,
-    Logger* info_log,
-    PropertyBlockBuilder* builder) {
+    const std::vector<std::unique_ptr<TablePropertiesCollector>>& collectors,
+    Logger* info_log, PropertyBlockBuilder* builder) {
   bool all_succeeded = true;
-  for (auto collector : collectors) {
+  for (auto& collector : collectors) {
     UserCollectedProperties user_collected_properties;
     Status s = collector->Finish(&user_collected_properties);
 
@@ -133,9 +131,9 @@ bool NotifyCollectTableCollectorsOnFinish(
   return all_succeeded;
 }
 
-Status ReadProperties(const Slice& handle_value, RandomAccessFile* file,
-                      Env* env, Logger* logger,
-                      TableProperties** table_properties) {
+Status ReadProperties(const Slice &handle_value, RandomAccessFile *file,
+                      const Footer &footer, Env *env, Logger *logger,
+                      TableProperties **table_properties) {
   assert(table_properties);
 
   Slice v = handle_value;
@@ -147,8 +145,8 @@ Status ReadProperties(const Slice& handle_value, RandomAccessFile* file,
   BlockContents block_contents;
   ReadOptions read_options;
   read_options.verify_checksums = false;
-  Status s = ReadBlockContents(file, read_options, handle, &block_contents, env,
-                               false);
+  Status s = ReadBlockContents(file, footer, read_options, handle,
+                               &block_contents, env, false);
 
   if (!s.ok()) {
     return s;
@@ -234,7 +232,7 @@ Status ReadTableProperties(RandomAccessFile* file, uint64_t file_size,
   BlockContents metaindex_contents;
   ReadOptions read_options;
   read_options.verify_checksums = false;
-  s = ReadBlockContents(file, read_options, metaindex_handle,
+  s = ReadBlockContents(file, footer, read_options, metaindex_handle,
                         &metaindex_contents, env, false);
   if (!s.ok()) {
     return s;
@@ -244,54 +242,35 @@ Status ReadTableProperties(RandomAccessFile* file, uint64_t file_size,
       metaindex_block.NewIterator(BytewiseComparator()));
 
   // -- Read property block
-  // This function is not used by BlockBasedTable, so we don't have to
-  // worry about old properties block name.
-  meta_iter->Seek(kPropertiesBlock);
+  bool found_properties_block = true;
+  s = SeekToPropertiesBlock(meta_iter.get(), &found_properties_block);
+  if (!s.ok()) {
+    return s;
+  }
+
   TableProperties table_properties;
-  if (meta_iter->Valid() &&
-      meta_iter->key() == kPropertiesBlock &&
-      meta_iter->status().ok()) {
-    s = ReadProperties(meta_iter->value(), file, env, info_log, properties);
+  if (found_properties_block == true) {
+    s = ReadProperties(meta_iter->value(), file, footer, env, info_log,
+                       properties);
   } else {
-    s = Status::Corruption(
-        "Unable to read the property block from the plain table");
+    s = Status::Corruption("Unable to read the property block.");
+    Log(WARN_LEVEL, info_log, "Cannot find Properties block from file.");
   }
 
   return s;
 }
 
-Status ReadTableMagicNumber(const std::string& file_path,
-                            const Options& options,
-                            const EnvOptions& env_options,
-                            uint64_t* table_magic_number) {
-  unique_ptr<RandomAccessFile> file;
-  Status s = options.env->NewRandomAccessFile(file_path, &file, env_options);
-  if (!s.ok()) {
-    return s;
+Status FindMetaBlock(Iterator* meta_index_iter,
+                     const std::string& meta_block_name,
+                     BlockHandle* block_handle) {
+  meta_index_iter->Seek(meta_block_name);
+  if (meta_index_iter->status().ok() && meta_index_iter->Valid() &&
+      meta_index_iter->key() == meta_block_name) {
+    Slice v = meta_index_iter->value();
+    return block_handle->DecodeFrom(&v);
+  } else {
+    return Status::Corruption("Cannot find the meta block", meta_block_name);
   }
-
-  uint64_t file_size;
-  options.env->GetFileSize(file_path, &file_size);
-  return ReadTableMagicNumber(file.get(), file_size, options, env_options,
-                              table_magic_number);
-}
-
-Status ReadTableMagicNumber(RandomAccessFile* file, uint64_t file_size,
-                            const Options& options,
-                            const EnvOptions& env_options,
-                            uint64_t* table_magic_number) {
-  if (file_size < Footer::kEncodedLength) {
-    return Status::InvalidArgument("file is too short to be an sstable");
-  }
-
-  Footer footer;
-  auto s = ReadFooterFromFile(file, file_size, &footer);
-  if (!s.ok()) {
-    return s;
-  }
-
-  *table_magic_number = footer.table_magic_number();
-  return Status::OK();
 }
 
 }  // namespace rocksdb

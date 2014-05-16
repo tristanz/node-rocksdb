@@ -4,6 +4,7 @@
 //  of patent rights can be found in the PATENTS file in the same directory.
 //
 
+#ifndef ROCKSDB_LITE
 #include "util/hash_linklist_rep.h"
 
 #include "rocksdb/memtablerep.h"
@@ -52,7 +53,8 @@ struct Node {
 class HashLinkListRep : public MemTableRep {
  public:
   HashLinkListRep(const MemTableRep::KeyComparator& compare, Arena* arena,
-                  const SliceTransform* transform, size_t bucket_size);
+                  const SliceTransform* transform, size_t bucket_size,
+                  size_t huge_page_tlb_size, Logger* logger);
 
   virtual KeyHandle Allocate(const size_t len, char** buf) override;
 
@@ -71,9 +73,6 @@ class HashLinkListRep : public MemTableRep {
   virtual MemTableRep::Iterator* GetIterator() override;
 
   virtual MemTableRep::Iterator* GetIterator(const Slice& slice) override;
-
-  virtual MemTableRep::Iterator* GetPrefixIterator(const Slice& prefix)
-      override;
 
   virtual MemTableRep::Iterator* GetDynamicPrefixIterator() override;
 
@@ -260,7 +259,6 @@ class HashLinkListRep : public MemTableRep {
     const HashLinkListRep* const hash_link_list_rep_;
     Node* head_;
     Node* node_;
-    std::string tmp_;       // For passing to EncodeKey
 
     virtual void SeekToHead() {
       node_ = head_;
@@ -308,13 +306,14 @@ class HashLinkListRep : public MemTableRep {
 
 HashLinkListRep::HashLinkListRep(const MemTableRep::KeyComparator& compare,
                                  Arena* arena, const SliceTransform* transform,
-                                 size_t bucket_size)
-  : MemTableRep(arena),
-    bucket_size_(bucket_size),
-    transform_(transform),
-    compare_(compare) {
-  char* mem = arena_->AllocateAligned(
-      sizeof(port::AtomicPointer) * bucket_size);
+                                 size_t bucket_size, size_t huge_page_tlb_size,
+                                 Logger* logger)
+    : MemTableRep(arena),
+      bucket_size_(bucket_size),
+      transform_(transform),
+      compare_(compare) {
+  char* mem = arena_->AllocateAligned(sizeof(port::AtomicPointer) * bucket_size,
+                                      huge_page_tlb_size, logger);
 
   buckets_ = new (mem) port::AtomicPointer[bucket_size];
 
@@ -428,17 +427,12 @@ MemTableRep::Iterator* HashLinkListRep::GetIterator() {
   return new FullListIterator(list, new_arena);
 }
 
-MemTableRep::Iterator* HashLinkListRep::GetPrefixIterator(
-  const Slice& prefix) {
-  auto bucket = GetBucket(prefix);
+MemTableRep::Iterator* HashLinkListRep::GetIterator(const Slice& slice) {
+  auto bucket = GetBucket(transform_->Transform(slice));
   if (bucket == nullptr) {
     return new EmptyIterator();
   }
   return new Iterator(this, bucket);
-}
-
-MemTableRep::Iterator* HashLinkListRep::GetIterator(const Slice& slice) {
-  return GetPrefixIterator(transform_->Transform(slice));
 }
 
 MemTableRep::Iterator* HashLinkListRep::GetDynamicPrefixIterator() {
@@ -475,12 +469,15 @@ Node* HashLinkListRep::FindGreaterOrEqualInBucket(Node* head,
 
 MemTableRep* HashLinkListRepFactory::CreateMemTableRep(
     const MemTableRep::KeyComparator& compare, Arena* arena,
-    const SliceTransform* transform) {
-  return new HashLinkListRep(compare, arena, transform, bucket_count_);
+    const SliceTransform* transform, Logger* logger) {
+  return new HashLinkListRep(compare, arena, transform, bucket_count_,
+                             huge_page_tlb_size_, logger);
 }
 
-MemTableRepFactory* NewHashLinkListRepFactory(size_t bucket_count) {
-  return new HashLinkListRepFactory(bucket_count);
+MemTableRepFactory* NewHashLinkListRepFactory(size_t bucket_count,
+                                              size_t huge_page_tlb_size) {
+  return new HashLinkListRepFactory(bucket_count, huge_page_tlb_size);
 }
 
 } // namespace rocksdb
+#endif  // ROCKSDB_LITE

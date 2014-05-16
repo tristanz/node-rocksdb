@@ -44,6 +44,11 @@
 
 namespace rocksdb {
 
+extern const uint64_t kLegacyBlockBasedTableMagicNumber;
+extern const uint64_t kLegacyPlainTableMagicNumber;
+extern const uint64_t kBlockBasedTableMagicNumber;
+extern const uint64_t kPlainTableMagicNumber;
+
 namespace {
 
 // Return reverse of "key".
@@ -307,11 +312,9 @@ class KeyConvertingIterator: public Iterator {
 class TableConstructor: public Constructor {
  public:
   explicit TableConstructor(const Comparator* cmp,
-                            bool convert_to_internal_key = false,
-                            bool prefix_seek = false)
+                            bool convert_to_internal_key = false)
       : Constructor(cmp),
-        convert_to_internal_key_(convert_to_internal_key),
-        prefix_seek_(prefix_seek) {}
+        convert_to_internal_key_(convert_to_internal_key) {}
   ~TableConstructor() { Reset(); }
 
   virtual Status FinishImpl(const Options& options,
@@ -352,9 +355,6 @@ class TableConstructor: public Constructor {
 
   virtual Iterator* NewIterator() const {
     ReadOptions ro;
-    if (prefix_seek_) {
-      ro.prefix_seek = true;
-    }
     Iterator* iter = table_reader_->NewIterator(ro);
     if (convert_to_internal_key_) {
       return new KeyConvertingIterator(iter);
@@ -388,7 +388,6 @@ class TableConstructor: public Constructor {
     source_.reset();
   }
   bool convert_to_internal_key_;
-  bool prefix_seek_;
 
   uint64_t uniq_id_;
   unique_ptr<StringSink> sink_;
@@ -434,7 +433,7 @@ class MemTableConstructor: public Constructor {
     return Status::OK();
   }
   virtual Iterator* NewIterator() const {
-    return new KeyConvertingIterator(memtable_->NewIterator());
+    return new KeyConvertingIterator(memtable_->NewIterator(ReadOptions()));
   }
 
  private:
@@ -699,7 +698,7 @@ class Harness {
         options_.prefix_extractor.reset(new FixedOrLessPrefixTransform(2));
         options_.allow_mmap_reads = true;
         options_.table_factory.reset(NewPlainTableFactory());
-        constructor_ = new TableConstructor(options_.comparator, true, true);
+        constructor_ = new TableConstructor(options_.comparator, true);
         internal_comparator_.reset(
             new InternalKeyComparator(options_.comparator));
         break;
@@ -709,7 +708,7 @@ class Harness {
         options_.prefix_extractor.reset(NewNoopTransform());
         options_.allow_mmap_reads = true;
         options_.table_factory.reset(NewPlainTableFactory());
-        constructor_ = new TableConstructor(options_.comparator, true, true);
+        constructor_ = new TableConstructor(options_.comparator, true);
         internal_comparator_.reset(
             new InternalKeyComparator(options_.comparator));
         break;
@@ -719,7 +718,7 @@ class Harness {
         options_.prefix_extractor = nullptr;
         options_.allow_mmap_reads = true;
         options_.table_factory.reset(NewTotalOrderPlainTableFactory());
-        constructor_ = new TableConstructor(options_.comparator, true, false);
+        constructor_ = new TableConstructor(options_.comparator, true);
         internal_comparator_.reset(
             new InternalKeyComparator(options_.comparator));
         break;
@@ -1055,6 +1054,116 @@ static std::string RandomString(Random* rnd, int len) {
   return r;
 }
 
+void AddInternalKey(TableConstructor* c, const std::string prefix,
+                    int suffix_len = 800) {
+  static Random rnd(1023);
+  InternalKey k(prefix + RandomString(&rnd, 800), 0, kTypeValue);
+  c->Add(k.Encode().ToString(), "v");
+}
+
+TEST(TableTest, HashIndexTest) {
+  TableConstructor c(BytewiseComparator());
+
+  // keys with prefix length 3, make sure the key/value is big enough to fill
+  // one block
+  AddInternalKey(&c, "0015");
+  AddInternalKey(&c, "0035");
+
+  AddInternalKey(&c, "0054");
+  AddInternalKey(&c, "0055");
+
+  AddInternalKey(&c, "0056");
+  AddInternalKey(&c, "0057");
+
+  AddInternalKey(&c, "0058");
+  AddInternalKey(&c, "0075");
+
+  AddInternalKey(&c, "0076");
+  AddInternalKey(&c, "0095");
+
+  std::vector<std::string> keys;
+  KVMap kvmap;
+  Options options;
+  BlockBasedTableOptions table_options;
+  table_options.index_type = BlockBasedTableOptions::kHashSearch;
+  options.table_factory.reset(new BlockBasedTableFactory(table_options));
+
+  options.prefix_extractor.reset(NewFixedPrefixTransform(3));
+  options.block_cache = NewLRUCache(1024);
+  options.block_size = 1700;
+
+  std::unique_ptr<InternalKeyComparator> comparator(
+      new InternalKeyComparator(BytewiseComparator()));
+  c.Finish(options, *comparator, &keys, &kvmap);
+  auto reader = c.table_reader();
+
+  auto props = c.table_reader()->GetTableProperties();
+  ASSERT_EQ(5u, props->num_data_blocks);
+
+  std::unique_ptr<Iterator> hash_iter(reader->NewIterator(ReadOptions()));
+
+  // -- Find keys do not exist, but have common prefix.
+  std::vector<std::string> prefixes = {"001", "003", "005", "007", "009"};
+  std::vector<std::string> lower_bound = {keys[0], keys[1], keys[2],
+                                          keys[7], keys[9], };
+
+  // find the lower bound of the prefix
+  for (size_t i = 0; i < prefixes.size(); ++i) {
+    hash_iter->Seek(InternalKey(prefixes[i], 0, kTypeValue).Encode());
+    ASSERT_OK(hash_iter->status());
+    ASSERT_TRUE(hash_iter->Valid());
+
+    // seek the first element in the block
+    ASSERT_EQ(lower_bound[i], hash_iter->key().ToString());
+    ASSERT_EQ("v", hash_iter->value().ToString());
+  }
+
+  // find the upper bound of prefixes
+  std::vector<std::string> upper_bound = {keys[1], keys[2], keys[7], keys[9], };
+
+  // find existing keys
+  for (const auto& item : kvmap) {
+    auto ukey = ExtractUserKey(item.first).ToString();
+    hash_iter->Seek(ukey);
+
+    // ASSERT_OK(regular_iter->status());
+    ASSERT_OK(hash_iter->status());
+
+    // ASSERT_TRUE(regular_iter->Valid());
+    ASSERT_TRUE(hash_iter->Valid());
+
+    ASSERT_EQ(item.first, hash_iter->key().ToString());
+    ASSERT_EQ(item.second, hash_iter->value().ToString());
+  }
+
+  for (size_t i = 0; i < prefixes.size(); ++i) {
+    // the key is greater than any existing keys.
+    auto key = prefixes[i] + "9";
+    hash_iter->Seek(InternalKey(key, 0, kTypeValue).Encode());
+
+    ASSERT_OK(hash_iter->status());
+    if (i == prefixes.size() - 1) {
+      // last key
+      ASSERT_TRUE(!hash_iter->Valid());
+    } else {
+      ASSERT_TRUE(hash_iter->Valid());
+      // seek the first element in the block
+      ASSERT_EQ(upper_bound[i], hash_iter->key().ToString());
+      ASSERT_EQ("v", hash_iter->value().ToString());
+    }
+  }
+
+  // find keys with prefix that don't match any of the existing prefixes.
+  std::vector<std::string> non_exist_prefixes = {"002", "004", "006", "008"};
+  for (const auto& prefix : non_exist_prefixes) {
+    hash_iter->Seek(InternalKey(prefix, 0, kTypeValue).Encode());
+    // regular_iter->Seek(prefix);
+
+    ASSERT_OK(hash_iter->status());
+    ASSERT_TRUE(!hash_iter->Valid());
+  }
+}
+
 // It's very hard to figure out the index block size of a block accurately.
 // To make sure we get the index size, we just make sure as key number
 // grows, the filter block size also grows.
@@ -1366,7 +1475,6 @@ TEST(BlockBasedTableTest, BlockCacheLeak) {
   }
 }
 
-extern const uint64_t kPlainTableMagicNumber;
 TEST(PlainTableTest, BasicPlainTableProperties) {
   PlainTableFactory factory(8, 8, 0);
   StringSink sink;
@@ -1554,9 +1662,10 @@ TEST(MemTableTest, Simple) {
   batch.Put(std::string("k2"), std::string("v2"));
   batch.Put(std::string("k3"), std::string("v3"));
   batch.Put(std::string("largekey"), std::string("vlarge"));
-  ASSERT_TRUE(WriteBatchInternal::InsertInto(&batch, memtable, &options).ok());
+  ColumnFamilyMemTablesDefault cf_mems_default(memtable, &options);
+  ASSERT_TRUE(WriteBatchInternal::InsertInto(&batch, &cf_mems_default).ok());
 
-  Iterator* iter = memtable->NewIterator();
+  Iterator* iter = memtable->NewIterator(ReadOptions());
   iter->SeekToFirst();
   while (iter->Valid()) {
     fprintf(stderr, "key: '%s' -> '%s'\n",
@@ -1609,6 +1718,83 @@ TEST(Harness, SimpleSpecialKey) {
     Random rnd(test::RandomSeed() + 4);
     Add("\xff\xff", "v3");
     Test(&rnd);
+  }
+}
+
+TEST(Harness, FooterTests) {
+  {
+    // upconvert legacy block based
+    std::string encoded;
+    Footer footer(kLegacyBlockBasedTableMagicNumber);
+    BlockHandle meta_index(10, 5), index(20, 15);
+    footer.set_metaindex_handle(meta_index);
+    footer.set_index_handle(index);
+    footer.EncodeTo(&encoded);
+    Footer decoded_footer;
+    Slice encoded_slice(encoded);
+    decoded_footer.DecodeFrom(&encoded_slice);
+    ASSERT_EQ(decoded_footer.table_magic_number(), kBlockBasedTableMagicNumber);
+    ASSERT_EQ(decoded_footer.checksum(), kCRC32c);
+    ASSERT_EQ(decoded_footer.metaindex_handle().offset(), meta_index.offset());
+    ASSERT_EQ(decoded_footer.metaindex_handle().size(), meta_index.size());
+    ASSERT_EQ(decoded_footer.index_handle().offset(), index.offset());
+    ASSERT_EQ(decoded_footer.index_handle().size(), index.size());
+  }
+  {
+    // xxhash block based
+    std::string encoded;
+    Footer footer(kBlockBasedTableMagicNumber);
+    BlockHandle meta_index(10, 5), index(20, 15);
+    footer.set_metaindex_handle(meta_index);
+    footer.set_index_handle(index);
+    footer.set_checksum(kxxHash);
+    footer.EncodeTo(&encoded);
+    Footer decoded_footer;
+    Slice encoded_slice(encoded);
+    decoded_footer.DecodeFrom(&encoded_slice);
+    ASSERT_EQ(decoded_footer.table_magic_number(), kBlockBasedTableMagicNumber);
+    ASSERT_EQ(decoded_footer.checksum(), kxxHash);
+    ASSERT_EQ(decoded_footer.metaindex_handle().offset(), meta_index.offset());
+    ASSERT_EQ(decoded_footer.metaindex_handle().size(), meta_index.size());
+    ASSERT_EQ(decoded_footer.index_handle().offset(), index.offset());
+    ASSERT_EQ(decoded_footer.index_handle().size(), index.size());
+  }
+  {
+    // upconvert legacy plain table
+    std::string encoded;
+    Footer footer(kLegacyPlainTableMagicNumber);
+    BlockHandle meta_index(10, 5), index(20, 15);
+    footer.set_metaindex_handle(meta_index);
+    footer.set_index_handle(index);
+    footer.EncodeTo(&encoded);
+    Footer decoded_footer;
+    Slice encoded_slice(encoded);
+    decoded_footer.DecodeFrom(&encoded_slice);
+    ASSERT_EQ(decoded_footer.table_magic_number(), kPlainTableMagicNumber);
+    ASSERT_EQ(decoded_footer.checksum(), kCRC32c);
+    ASSERT_EQ(decoded_footer.metaindex_handle().offset(), meta_index.offset());
+    ASSERT_EQ(decoded_footer.metaindex_handle().size(), meta_index.size());
+    ASSERT_EQ(decoded_footer.index_handle().offset(), index.offset());
+    ASSERT_EQ(decoded_footer.index_handle().size(), index.size());
+  }
+  {
+    // xxhash block based
+    std::string encoded;
+    Footer footer(kPlainTableMagicNumber);
+    BlockHandle meta_index(10, 5), index(20, 15);
+    footer.set_metaindex_handle(meta_index);
+    footer.set_index_handle(index);
+    footer.set_checksum(kxxHash);
+    footer.EncodeTo(&encoded);
+    Footer decoded_footer;
+    Slice encoded_slice(encoded);
+    decoded_footer.DecodeFrom(&encoded_slice);
+    ASSERT_EQ(decoded_footer.table_magic_number(), kPlainTableMagicNumber);
+    ASSERT_EQ(decoded_footer.checksum(), kxxHash);
+    ASSERT_EQ(decoded_footer.metaindex_handle().offset(), meta_index.offset());
+    ASSERT_EQ(decoded_footer.metaindex_handle().size(), meta_index.size());
+    ASSERT_EQ(decoded_footer.index_handle().offset(), index.offset());
+    ASSERT_EQ(decoded_footer.index_handle().size(), index.size());
   }
 }
 

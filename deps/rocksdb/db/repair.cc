@@ -29,6 +29,8 @@
 //   Store per-table metadata (smallest, largest, largest-seq#, ...)
 //   in the table's meta section to speed up ScanTable.
 
+#ifndef ROCKSDB_LITE
+
 #include "db/builder.h"
 #include "db/db_impl.h"
 #include "db/dbformat.h"
@@ -55,14 +57,20 @@ class Repairer {
         icmp_(options.comparator),
         ipolicy_(options.filter_policy),
         options_(SanitizeOptions(dbname, &icmp_, &ipolicy_, options)),
+        raw_table_cache_(
+            // TableCache can be small since we expect each table to be opened
+            // once.
+            NewLRUCache(10, options_.table_cache_numshardbits,
+                        options_.table_cache_remove_scan_count_limit)),
         next_file_number_(1) {
-    // TableCache can be small since we expect each table to be opened once.
-    table_cache_ = new TableCache(dbname_, &options_, storage_options_, 10);
+    table_cache_ = new TableCache(dbname_, &options_, storage_options_,
+                                  raw_table_cache_.get());
     edit_ = new VersionEdit();
   }
 
   ~Repairer() {
     delete table_cache_;
+    raw_table_cache_.reset();
     delete edit_;
   }
 
@@ -102,6 +110,7 @@ class Repairer {
   InternalKeyComparator const icmp_;
   InternalFilterPolicy const ipolicy_;
   Options const options_;
+  std::shared_ptr<Cache> raw_table_cache_;
   TableCache* table_cache_;
   VersionEdit* edit_;
 
@@ -197,6 +206,7 @@ class Repairer {
     Slice record;
     WriteBatch batch;
     MemTable* mem = new MemTable(icmp_, options_);
+    auto cf_mems_default = new ColumnFamilyMemTablesDefault(mem, &options_);
     mem->Ref();
     int counter = 0;
     while (reader.ReadRecord(&record, &scratch)) {
@@ -206,7 +216,7 @@ class Repairer {
         continue;
       }
       WriteBatchInternal::SetContents(&batch, record);
-      status = WriteBatchInternal::InsertInto(&batch, mem, &options_);
+      status = WriteBatchInternal::InsertInto(&batch, cf_mems_default);
       if (status.ok()) {
         counter += WriteBatchInternal::Count(&batch);
       } else {
@@ -221,11 +231,13 @@ class Repairer {
     // since ExtractMetaData() will also generate edits.
     FileMetaData meta;
     meta.number = next_file_number_++;
-    Iterator* iter = mem->NewIterator();
+    ReadOptions ro;
+    Iterator* iter = mem->NewIterator(ro, true /* enforce_total_order */);
     status = BuildTable(dbname_, env_, options_, storage_options_, table_cache_,
                         iter, &meta, icmp_, 0, 0, kNoCompression);
     delete iter;
     delete mem->Unref();
+    delete cf_mems_default;
     mem = nullptr;
     if (status.ok()) {
       if (meta.file_size > 0) {
@@ -351,7 +363,7 @@ class Repairer {
       // Install new manifest
       status = env_->RenameFile(tmp, DescriptorFileName(dbname_, 1));
       if (status.ok()) {
-        status = SetCurrentFile(env_, dbname_, 1);
+        status = SetCurrentFile(env_, dbname_, 1, nullptr);
       } else {
         env_->DeleteFile(tmp);
       }
@@ -387,3 +399,5 @@ Status RepairDB(const std::string& dbname, const Options& options) {
 }
 
 }  // namespace rocksdb
+
+#endif  // ROCKSDB_LITE

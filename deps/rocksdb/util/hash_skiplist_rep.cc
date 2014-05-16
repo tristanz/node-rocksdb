@@ -4,6 +4,7 @@
 //  of patent rights can be found in the PATENTS file in the same directory.
 //
 
+#ifndef ROCKSDB_LITE
 #include "util/hash_skiplist_rep.h"
 
 #include "rocksdb/memtablerep.h"
@@ -40,9 +41,6 @@ class HashSkipListRep : public MemTableRep {
   virtual MemTableRep::Iterator* GetIterator() override;
 
   virtual MemTableRep::Iterator* GetIterator(const Slice& slice) override;
-
-  virtual MemTableRep::Iterator* GetPrefixIterator(const Slice& prefix)
-      override;
 
   virtual MemTableRep::Iterator* GetDynamicPrefixIterator() override;
 
@@ -306,16 +304,12 @@ MemTableRep::Iterator* HashSkipListRep::GetIterator() {
   return new Iterator(list, true, new_arena);
 }
 
-MemTableRep::Iterator* HashSkipListRep::GetPrefixIterator(const Slice& prefix) {
-  auto bucket = GetBucket(prefix);
+MemTableRep::Iterator* HashSkipListRep::GetIterator(const Slice& slice) {
+  auto bucket = GetBucket(transform_->Transform(slice));
   if (bucket == nullptr) {
     return new EmptyIterator();
   }
   return new Iterator(bucket, false);
-}
-
-MemTableRep::Iterator* HashSkipListRep::GetIterator(const Slice& slice) {
-  return GetPrefixIterator(transform_->Transform(slice));
 }
 
 MemTableRep::Iterator* HashSkipListRep::GetDynamicPrefixIterator() {
@@ -326,7 +320,7 @@ MemTableRep::Iterator* HashSkipListRep::GetDynamicPrefixIterator() {
 
 MemTableRep* HashSkipListRepFactory::CreateMemTableRep(
     const MemTableRep::KeyComparator& compare, Arena* arena,
-    const SliceTransform* transform) {
+    const SliceTransform* transform, Logger* logger) {
   return new HashSkipListRep(compare, arena, transform, bucket_count_,
                              skiplist_height_, skiplist_branching_factor_);
 }
@@ -339,3 +333,4 @@ MemTableRepFactory* NewHashSkipListRepFactory(
 }
 
 } // namespace rocksdb
+#endif  // ROCKSDB_LITE

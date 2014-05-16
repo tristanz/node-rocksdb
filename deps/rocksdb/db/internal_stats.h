@@ -16,6 +16,8 @@
 #include <vector>
 #include <string>
 
+class ColumnFamilyData;
+
 namespace rocksdb {
 
 class MemTableList;
@@ -26,13 +28,16 @@ enum DBPropertyType {
   kLevelStats,       // Return number of files and total sizes of each level
   kStats,            // Return general statitistics of DB
   kSsTables,         // Return a human readable string of current SST files
-  kNumImmutableMemTable,  // Return number of immutable mem tables
-  kMemtableFlushPending,  // Return 1 if mem table flushing is pending,
-                          // otherwise
-                          // 0.
-  kCompactionPending,     // Return 1 if a compaction is pending. Otherwise 0.
-  kBackgroundErrors,      // Return accumulated background errors encountered.
+  kNumImmutableMemTable,   // Return number of immutable mem tables
+  kMemtableFlushPending,   // Return 1 if mem table flushing is pending,
+                           // otherwise 0.
+  kCompactionPending,      // Return 1 if a compaction is pending. Otherwise 0.
+  kBackgroundErrors,       // Return accumulated background errors encountered.
   kCurSizeActiveMemTable,  // Return current size of the active memtable
+  kNumEntriesInMutableMemtable,    // Return number of entries in the mutable
+                                   // memtable.
+  kNumEntriesInImmutableMemtable,  // Return sum of number of entries in all
+                                   // the immutable mem tables.
   kUnknown,
 };
 
@@ -126,7 +131,7 @@ class InternalStats {
   uint64_t BumpAndGetBackgroundErrorCount() { return ++bg_error_count_; }
 
   bool GetProperty(DBPropertyType property_type, const Slice& property,
-                   std::string* value, DBImpl* db);
+                   std::string* value, ColumnFamilyData* cfd);
 
  private:
   std::vector<CompactionStats> compaction_stats_;

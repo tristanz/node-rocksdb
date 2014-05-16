@@ -6,6 +6,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#ifndef ROCKSDB_LITE
 #pragma once
 #include "rocksdb/slice_transform.h"
 #include "rocksdb/memtablerep.h"
@@ -14,14 +15,15 @@ namespace rocksdb {
 
 class HashLinkListRepFactory : public MemTableRepFactory {
  public:
-  explicit HashLinkListRepFactory(size_t bucket_count)
-      : bucket_count_(bucket_count) { }
+  explicit HashLinkListRepFactory(size_t bucket_count,
+                                  size_t huge_page_tlb_size)
+      : bucket_count_(bucket_count), huge_page_tlb_size_(huge_page_tlb_size) {}
 
   virtual ~HashLinkListRepFactory() {}
 
   virtual MemTableRep* CreateMemTableRep(
       const MemTableRep::KeyComparator& compare, Arena* arena,
-      const SliceTransform* transform) override;
+      const SliceTransform* transform, Logger* logger) override;
 
   virtual const char* Name() const override {
     return "HashLinkListRepFactory";
@@ -29,6 +31,8 @@ class HashLinkListRepFactory : public MemTableRepFactory {
 
  private:
   const size_t bucket_count_;
+  const size_t huge_page_tlb_size_;
 };
 
 }
+#endif  // ROCKSDB_LITE

@@ -6,7 +6,9 @@
 // as production quality.
 
 #pragma once
+#ifndef ROCKSDB_LITE
 #include <stdint.h>
+#include <vector>
 #include "rocksdb/options.h"
 #include "rocksdb/status.h"
 #include "table/table_builder.h"
@@ -61,6 +63,8 @@ public:
 
 private:
   Options options_;
+  std::vector<std::unique_ptr<TablePropertiesCollector>>
+      table_properties_collectors_;
   WritableFile* file_;
   uint64_t offset_ = 0;
   Status status_;
@@ -68,9 +72,6 @@ private:
 
   const size_t user_key_len_;
   bool closed_ = false;  // Either Finish() or Abandon() has been called.
-
-  std::string key_size_str_;
-  std::string value_size_str_;
 
   bool IsFixedLength() const {
     return user_key_len_ > 0;
@@ -83,3 +84,4 @@ private:
 
 }  // namespace rocksdb
 
+#endif  // ROCKSDB_LITE

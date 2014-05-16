@@ -11,14 +11,14 @@ package org.rocksdb;
  * Note that developers should call WriteOptions.dispose() to release the
  * c++ side memory before a WriteOptions instance runs out of scope.
  */
-public class WriteOptions {
+public class WriteOptions extends RocksObject {
   public WriteOptions() {
-    nativeHandle_ = 0;
+    super();
     newWriteOptions();
   }
 
-  public synchronized void dispose() {
-    if (nativeHandle_ != 0) {
+  @Override public synchronized void dispose() {
+    if (isInitialized()) {
       dispose0(nativeHandle_);
     }
   }
@@ -40,9 +40,14 @@ public class WriteOptions {
    * system call followed by "fdatasync()".
    *
    * Default: false
+   *
+   * @param flag a boolean flag to indicate whether a write
+   *     should be synchronized.
+   * @return the instance of the current WriteOptions.
    */
-  public void setSync(boolean flag) {
+  public WriteOptions setSync(boolean flag) {
     setSync(nativeHandle_, flag);
+    return this;
   }
 
   /**
@@ -68,9 +73,14 @@ public class WriteOptions {
   /**
    * If true, writes will not first go to the write ahead log,
    * and the write may got lost after a crash.
+   *
+   * @param flag a boolean flag to specify whether to disable
+   *     write-ahead-log on writes.
+   * @return the instance of the current WriteOptions.
    */
-  public void setDisableWAL(boolean flag) {
+  public WriteOptions setDisableWAL(boolean flag) {
     setDisableWAL(nativeHandle_, flag);
+    return this;
   }
 
   /**
@@ -81,16 +91,10 @@ public class WriteOptions {
     return disableWAL(nativeHandle_);
   }
 
-  @Override protected void finalize() {
-    dispose();
-  }
-
   private native void newWriteOptions();
   private native void setSync(long handle, boolean flag);
   private native boolean sync(long handle);
   private native void setDisableWAL(long handle, boolean flag);
   private native boolean disableWAL(long handle);
   private native void dispose0(long handle);
-
-  protected  long nativeHandle_;
 }

@@ -17,7 +17,7 @@
 #include "db/write_batch_internal.h"
 #include "utilities/merge_operators.h"
 #include "util/testharness.h"
-#include "utilities/utility_db.h"
+#include "utilities/db_ttl.h"
 
 using namespace std;
 using namespace rocksdb;
@@ -75,11 +75,11 @@ class CountMergeOperator : public AssociativeMergeOperator {
   std::shared_ptr<MergeOperator> mergeOperator_;
 };
 
+namespace {
 std::shared_ptr<DB> OpenDb(const string& dbname, const bool ttl = false,
                            const size_t max_successive_merges = 0,
                            const uint32_t min_partial_merge_operands = 2) {
   DB* db;
-  StackableDB* sdb;
   Options options;
   options.create_if_missing = true;
   options.merge_operator = std::make_shared<CountMergeOperator>();
@@ -89,8 +89,9 @@ std::shared_ptr<DB> OpenDb(const string& dbname, const bool ttl = false,
   DestroyDB(dbname, Options());
   if (ttl) {
     cout << "Opening database with TTL\n";
-    s = UtilityDB::OpenTtlDB(options, dbname, &sdb);
-    db = sdb;
+    DBWithTTL* db_with_ttl;
+    s = DBWithTTL::Open(options, dbname, &db_with_ttl);
+    db = db_with_ttl;
   } else {
     s = DB::Open(options, dbname, &db);
   }
@@ -100,6 +101,7 @@ std::shared_ptr<DB> OpenDb(const string& dbname, const bool ttl = false,
   }
   return std::shared_ptr<DB>(db);
 }
+}  // namespace
 
 // Imagine we are maintaining a set of uint64 counters.
 // Each counter has a distinct name. And we would like
@@ -201,12 +203,16 @@ class Counters {
 
   uint64_t assert_get(const string& key) {
     uint64_t value = default_;
-    assert(get(key, &value));
+    int result = get(key, &value);
+    assert(result);
+    if (result == 0) exit(1); // Disable unused variable warning.
     return value;
   }
 
   void assert_add(const string& key, uint64_t value) {
-    assert(add(key, value));
+    int result = add(key, value);
+    assert(result);
+    if (result == 0) exit(1); // Disable unused variable warning. 
   }
 };
 
@@ -237,6 +243,7 @@ class MergeBasedCounters : public Counters {
   }
 };
 
+namespace {
 void dumpDb(DB* db) {
   auto it = unique_ptr<Iterator>(db->NewIterator(ReadOptions()));
   for (it->SeekToFirst(); it->Valid(); it->Next()) {
@@ -454,6 +461,7 @@ void runTest(int argc, const string& dbname, const bool use_ttl = false) {
     }
   }
 }
+}  // namespace
 
 int main(int argc, char *argv[]) {
   //TODO: Make this test like a general rocksdb unit-test

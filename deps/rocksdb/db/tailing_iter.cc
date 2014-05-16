@@ -3,21 +3,35 @@
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
 
+#ifndef ROCKSDB_LITE
 #include "db/tailing_iter.h"
 
 #include <string>
 #include <utility>
+#include <vector>
 #include "db/db_impl.h"
+#include "db/db_iter.h"
+#include "db/column_family.h"
+#include "rocksdb/env.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/slice_transform.h"
+#include "table/merger.h"
 
 namespace rocksdb {
 
-TailingIterator::TailingIterator(DBImpl* db, const ReadOptions& options,
-                                 const Comparator* comparator)
-    : db_(db), options_(options), comparator_(comparator),
-      version_number_(0), current_(nullptr),
+TailingIterator::TailingIterator(Env* const env, DBImpl* db,
+    const ReadOptions& read_options, ColumnFamilyData* cfd)
+    : env_(env),
+      db_(db),
+      read_options_(read_options),
+      cfd_(cfd),
+      super_version_(nullptr),
+      current_(nullptr),
       status_(Status::InvalidArgument("Seek() not called on this iterator")) {}
+
+TailingIterator::~TailingIterator() {
+  Cleanup();
+}
 
 bool TailingIterator::Valid() const {
   return current_ != nullptr;
@@ -46,18 +60,17 @@ void TailingIterator::Seek(const Slice& target) {
   // need to do a seek if 'target' belongs to that interval (i.e. immutable_ is
   // already at the correct position)!
   //
-  // If options.prefix_seek is used and immutable_ is not valid, seek if target
-  // has a different prefix than prev_key.
+  // If prefix seek is used and immutable_ is not valid, seek if target has a
+  // different prefix than prev_key.
   //
   // prev_key_ is updated by Next(). SeekImmutable() sets prev_key_ to
   // 'target' -- in this case, prev_key_ is included in the interval, so
   // prev_inclusive_ has to be set.
 
-  if (!is_prev_set_ ||
-      comparator_->Compare(prev_key_, target) >= !is_prev_inclusive_ ||
-      (immutable_->Valid() &&
-       comparator_->Compare(target, immutable_->key()) > 0) ||
-      (options_.prefix_seek && !IsSamePrefix(target))) {
+  const Comparator* cmp = cfd_->user_comparator();
+  if (!is_prev_set_ || cmp->Compare(prev_key_, target) >= !is_prev_inclusive_ ||
+      (immutable_->Valid() && cmp->Compare(target, immutable_->key()) > 0) ||
+      (cfd_->options()->prefix_extractor != nullptr && !IsSamePrefix(target))) {
     SeekImmutable(target);
   }
 
@@ -119,14 +132,45 @@ void TailingIterator::SeekToLast() {
   status_ = Status::NotSupported("This iterator doesn't support SeekToLast()");
 }
 
+void TailingIterator::Cleanup() {
+  // Release old super version if necessary
+  mutable_.reset();
+  immutable_.reset();
+  if (super_version_ != nullptr && super_version_->Unref()) {
+    DBImpl::DeletionState deletion_state;
+    db_->mutex_.Lock();
+    super_version_->Cleanup();
+    db_->FindObsoleteFiles(deletion_state, false, true);
+    db_->mutex_.Unlock();
+    delete super_version_;
+    if (deletion_state.HaveSomethingToDelete()) {
+      db_->PurgeObsoleteFiles(deletion_state);
+    }
+  }
+}
+
 void TailingIterator::CreateIterators() {
-  std::pair<Iterator*, Iterator*> iters =
-    db_->GetTailingIteratorPair(options_, &version_number_);
+  Cleanup();
+  super_version_= cfd_->GetReferencedSuperVersion(&(db_->mutex_));
 
-  assert(iters.first && iters.second);
+  Iterator* mutable_iter = super_version_->mem->NewIterator(read_options_);
+  // create a DBIter that only uses memtable content; see NewIterator()
+  mutable_.reset(
+      NewDBIterator(env_, *cfd_->options(), cfd_->user_comparator(),
+                    mutable_iter, kMaxSequenceNumber));
 
-  mutable_.reset(iters.first);
-  immutable_.reset(iters.second);
+  std::vector<Iterator*> list;
+  super_version_->imm->AddIterators(read_options_, &list);
+  super_version_->current->AddIterators(
+      read_options_, *cfd_->soptions(), &list);
+  Iterator* immutable_iter =
+      NewMergingIterator(&cfd_->internal_comparator(), &list[0], list.size());
+
+  // create a DBIter that only uses memtable content; see NewIterator()
+  immutable_.reset(
+      NewDBIterator(env_, *cfd_->options(), cfd_->user_comparator(),
+                    immutable_iter, kMaxSequenceNumber));
+
   current_ = nullptr;
   is_prev_set_ = false;
 }
@@ -137,9 +181,10 @@ void TailingIterator::UpdateCurrent() {
   if (mutable_->Valid()) {
     current_ = mutable_.get();
   }
+  const Comparator* cmp = cfd_->user_comparator();
   if (immutable_->Valid() &&
       (current_ == nullptr ||
-       comparator_->Compare(immutable_->key(), current_->key()) < 0)) {
+       cmp->Compare(immutable_->key(), current_->key()) < 0)) {
     current_ = immutable_.get();
   }
 
@@ -150,12 +195,12 @@ void TailingIterator::UpdateCurrent() {
 }
 
 bool TailingIterator::IsCurrentVersion() const {
-  return mutable_ != nullptr && immutable_ != nullptr &&
-    version_number_ == db_->CurrentVersionNumber();
+  return super_version_ != nullptr &&
+         super_version_->version_number == cfd_->GetSuperVersionNumber();
 }
 
 bool TailingIterator::IsSamePrefix(const Slice& target) const {
-  const SliceTransform* extractor = db_->options_.prefix_extractor.get();
+  const SliceTransform* extractor = cfd_->options()->prefix_extractor.get();
 
   assert(extractor);
   assert(is_prev_set_);
@@ -173,3 +218,4 @@ void TailingIterator::SeekImmutable(const Slice& target) {
 }
 
 }  // namespace rocksdb
+#endif  // ROCKSDB_LITE

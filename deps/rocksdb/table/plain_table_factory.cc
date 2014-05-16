@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#ifndef ROCKSDB_LITE
 #include "table/plain_table_factory.h"
 
 #include <memory>
@@ -21,7 +22,8 @@ Status PlainTableFactory::NewTableReader(const Options& options,
                                          unique_ptr<TableReader>* table) const {
   return PlainTableReader::Open(options, soptions, icomp, std::move(file),
                                 file_size, table, bloom_bits_per_key_,
-                                hash_table_ratio_, index_sparseness_);
+                                hash_table_ratio_, index_sparseness_,
+                                huge_page_tlb_size_);
 }
 
 TableBuilder* PlainTableFactory::NewTableBuilder(
@@ -33,16 +35,20 @@ TableBuilder* PlainTableFactory::NewTableBuilder(
 extern TableFactory* NewPlainTableFactory(uint32_t user_key_len,
                                           int bloom_bits_per_key,
                                           double hash_table_ratio,
-                                          size_t index_sparseness) {
+                                          size_t index_sparseness,
+                                          size_t huge_page_tlb_size) {
   return new PlainTableFactory(user_key_len, bloom_bits_per_key,
-                               hash_table_ratio, index_sparseness);
+                               hash_table_ratio, index_sparseness,
+                               huge_page_tlb_size);
 }
 
 extern TableFactory* NewTotalOrderPlainTableFactory(uint32_t user_key_len,
                                                     int bloom_bits_per_key,
-                                                    size_t index_sparseness) {
+                                                    size_t index_sparseness,
+                                                    size_t huge_page_tlb_size) {
   return new PlainTableFactory(user_key_len, bloom_bits_per_key, 0,
-                               index_sparseness);
+                               index_sparseness, huge_page_tlb_size);
 }
 
 }  // namespace rocksdb
+#endif  // ROCKSDB_LITE

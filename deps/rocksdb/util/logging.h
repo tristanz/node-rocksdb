@@ -21,6 +21,9 @@ namespace rocksdb {
 class Slice;
 class WritableFile;
 
+// Append a human-readable size in bytes
+int AppendHumanBytes(uint64_t bytes, char* output, int len);
+
 // Append a human-readable printout of "num" to *str
 extern void AppendNumberTo(std::string* str, uint64_t num);
 
@@ -34,10 +37,6 @@ extern std::string NumberToString(uint64_t num);
 // Return a human-readable version of "value".
 // Escapes any non-printable characters found in "value".
 extern std::string EscapeString(const Slice& value);
-
-// If *in starts with "c", advances *in past the first character and
-// returns true.  Otherwise, returns false.
-extern bool ConsumeChar(Slice* in, char c);
 
 // Parse a human-readable number from "*in" into *value.  On success,
 // advances "*in" past the consumed number and sets "*val" to the

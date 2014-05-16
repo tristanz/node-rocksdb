@@ -200,6 +200,17 @@ TEST(EnvPosixTest, TwoPools) {
   ASSERT_EQ(0U, env_->GetThreadPoolQueueLen(Env::Priority::HIGH));
 }
 
+#ifdef OS_LINUX
+// To make sure the Env::GetUniqueId() related tests work correctly, The files
+// should be stored in regular storage like "hard disk" or "flash device".
+// Otherwise we cannot get the correct id.
+//
+// The following function act as the replacement of test::TmpDir() that may be
+// customized by user to be on a storage that doesn't work with GetUniqueId().
+//
+// TODO(kailiu) This function still assumes /tmp/<test-dir> reside in regular
+// storage system.
+namespace {
 bool IsSingleVarint(const std::string& s) {
   Slice slice(s);
 
@@ -211,16 +222,6 @@ bool IsSingleVarint(const std::string& s) {
   return slice.size() == 0;
 }
 
-#ifdef OS_LINUX
-// To make sure the Env::GetUniqueId() related tests work correctly, The files
-// should be stored in regular storage like "hard disk" or "flash device".
-// Otherwise we cannot get the correct id.
-//
-// The following function act as the replacement of test::TmpDir() that may be
-// customized by user to be on a storage that doesn't work with GetUniqueId().
-//
-// TODO(kailiu) This function still assumes /tmp/<test-dir> reside in regular
-// storage system.
 bool IsUniqueIDValid(const std::string& s) {
   return !s.empty() && !IsSingleVarint(s);
 }
@@ -237,6 +238,7 @@ std::string GetOnDiskTestDir() {
 
   return base;
 }
+}  // namespace
 
 // Only works in linux platforms
 TEST(EnvPosixTest, RandomAccessUniqueID) {
@@ -290,7 +292,6 @@ TEST(EnvPosixTest, AllocateTest) {
   // allocate 100 MB
   size_t kPreallocateSize = 100 * 1024 * 1024;
   size_t kBlockSize = 512;
-  size_t kPageSize = 4096;
   std::string data = "test";
   wfile->SetPreallocationBlockSize(kPreallocateSize);
   ASSERT_OK(wfile->Append(Slice(data)));
@@ -300,7 +301,12 @@ TEST(EnvPosixTest, AllocateTest) {
   stat(fname.c_str(), &f_stat);
   ASSERT_EQ((unsigned int)data.size(), f_stat.st_size);
   // verify that blocks are preallocated
-  ASSERT_EQ((unsigned int)(kPreallocateSize / kBlockSize), f_stat.st_blocks);
+  // Note here that we don't check the exact number of blocks preallocated --
+  // we only require that number of allocated blocks is at least what we expect.
+  // It looks like some FS give us more blocks that we asked for. That's fine.
+  // It might be worth investigating further.
+  auto st_blocks = f_stat.st_blocks;
+  ASSERT_LE((unsigned int)(kPreallocateSize / kBlockSize), st_blocks);
 
   // close the file, should deallocate the blocks
   wfile.reset();
@@ -308,8 +314,7 @@ TEST(EnvPosixTest, AllocateTest) {
   stat(fname.c_str(), &f_stat);
   ASSERT_EQ((unsigned int)data.size(), f_stat.st_size);
   // verify that preallocated blocks were deallocated on file close
-  size_t data_blocks_pages = ((data.size() + kPageSize - 1) / kPageSize);
-  ASSERT_EQ((unsigned int)(data_blocks_pages * kPageSize / kBlockSize), f_stat.st_blocks);
+  ASSERT_GT(st_blocks, f_stat.st_blocks);
 }
 #endif
 
@@ -503,12 +508,12 @@ class TestLogger : public Logger {
 
 TEST(EnvPosixTest, LogBufferTest) {
   TestLogger test_logger;
-  test_logger.SetInfoLogLevel(INFO);
+  test_logger.SetInfoLogLevel(InfoLogLevel::INFO_LEVEL);
   test_logger.log_count = 0;
   test_logger.char_x_count = 0;
   test_logger.char_0_count = 0;
-  LogBuffer log_buffer(INFO, &test_logger);
-  LogBuffer log_buffer_debug(DEBUG, &test_logger);
+  LogBuffer log_buffer(InfoLogLevel::INFO_LEVEL, &test_logger);
+  LogBuffer log_buffer_debug(DEBUG_LEVEL, &test_logger);
 
   char bytes200[200];
   std::fill_n(bytes200, sizeof(bytes200), '1');
@@ -527,7 +532,7 @@ TEST(EnvPosixTest, LogBufferTest) {
   LogToBuffer(&log_buffer, "x%sx%sx", bytes600, bytes9000);
 
   LogToBuffer(&log_buffer_debug, "x%sx", bytes200);
-  test_logger.SetInfoLogLevel(DEBUG);
+  test_logger.SetInfoLogLevel(DEBUG_LEVEL);
   LogToBuffer(&log_buffer_debug, "x%sx%sx%sx", bytes600, bytes9000, bytes200);
 
   ASSERT_EQ(0, test_logger.log_count);

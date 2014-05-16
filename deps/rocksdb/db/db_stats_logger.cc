@@ -20,7 +20,8 @@
 namespace rocksdb {
 
 void DBImpl::MaybeScheduleLogDBDeployStats() {
-
+// we did say maybe
+#ifndef ROCKSDB_LITE
   // There is a lock in the actual logger.
   if (!logger_ || options_.db_stats_log_interval < 0
       || host_name_.empty()) {
@@ -65,7 +66,7 @@ void DBImpl::LogDBDeployStats() {
 
   uint64_t file_total_size = 0;
   uint32_t file_total_num = 0;
-  Version* current = versions_->current();
+  Version* current = default_cf_handle_->cfd()->current();
   for (int i = 0; i < current->NumberLevels(); i++) {
     file_total_num += current->NumLevelFiles(i);
     file_total_size += current->NumLevelBytes(i);
@@ -89,6 +90,6 @@ void DBImpl::LogDBDeployStats() {
   bg_logstats_scheduled_ = false;
   bg_cv_.SignalAll();
   mutex_.Unlock();
+#endif
 }
-
 }

@@ -8,6 +8,7 @@
 #include <string>
 #include "rocksdb/db.h"
 #include "db/memtable.h"
+#include "db/version_set.h"
 #include "rocksdb/env.h"
 #include "rocksdb/iterator.h"
 #include "util/coding.h"
@@ -77,6 +78,14 @@ void MemTableListVersion::AddIterators(const ReadOptions& options,
   }
 }
 
+uint64_t MemTableListVersion::GetTotalNumEntries() const {
+  uint64_t total_num = 0;
+  for (auto& m : memlist_) {
+    total_num += m->GetNumEntries();
+  }
+  return total_num;
+}
+
 // caller is responsible for referencing m
 void MemTableListVersion::Add(MemTable* m) {
   assert(refs_ == 1);  // only when refs_ == 1 is MemTableListVersion mutable
@@ -121,7 +130,8 @@ void MemTableList::PickMemtablesToFlush(autovector<MemTable*>* ret) {
 }
 
 void MemTableList::RollbackMemtableFlush(const autovector<MemTable*>& mems,
-     uint64_t file_number, std::set<uint64_t>* pending_outputs) {
+                                         uint64_t file_number,
+                                         std::set<uint64_t>* pending_outputs) {
   assert(!mems.empty());
 
   // If the flush was not successful, then just reset state.
@@ -141,10 +151,10 @@ void MemTableList::RollbackMemtableFlush(const autovector<MemTable*>& mems,
 
 // Record a successful flush in the manifest file
 Status MemTableList::InstallMemtableFlushResults(
-    const autovector<MemTable*>& mems, VersionSet* vset, port::Mutex* mu,
-    Logger* info_log, uint64_t file_number, std::set<uint64_t>& pending_outputs,
-    autovector<MemTable*>* to_delete, Directory* db_directory,
-    LogBuffer* log_buffer) {
+    ColumnFamilyData* cfd, const autovector<MemTable*>& mems, VersionSet* vset,
+    port::Mutex* mu, Logger* info_log, uint64_t file_number,
+    std::set<uint64_t>& pending_outputs, autovector<MemTable*>* to_delete,
+    Directory* db_directory, LogBuffer* log_buffer) {
   mu->AssertHeld();
 
   // flush was sucessful
@@ -174,11 +184,11 @@ Status MemTableList::InstallMemtableFlushResults(
       break;
     }
 
-    LogToBuffer(log_buffer, "Level-0 commit table #%lu started",
-                (unsigned long)m->file_number_);
+    LogToBuffer(log_buffer, "[%s] Level-0 commit table #%lu started",
+                cfd->GetName().c_str(), (unsigned long)m->file_number_);
 
     // this can release and reacquire the mutex.
-    s = vset->LogAndApply(&m->edit_, mu, db_directory);
+    s = vset->LogAndApply(cfd, &m->edit_, mu, db_directory);
 
     // we will be changing the version in the next code path,
     // so we better create a new one, since versions are immutable
@@ -189,8 +199,10 @@ Status MemTableList::InstallMemtableFlushResults(
     uint64_t mem_id = 1;  // how many memtables has been flushed.
     do {
       if (s.ok()) { // commit new state
-        LogToBuffer(log_buffer, "Level-0 commit table #%lu: memtable #%lu done",
-                    (unsigned long)m->file_number_, (unsigned long)mem_id);
+        LogToBuffer(log_buffer,
+                    "[%s] Level-0 commit table #%lu: memtable #%lu done",
+                    cfd->GetName().c_str(), (unsigned long)m->file_number_,
+                    (unsigned long)mem_id);
         current_->Remove(m);
         assert(m->file_number_ > 0);
 

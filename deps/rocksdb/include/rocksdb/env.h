@@ -34,7 +34,7 @@ class Slice;
 class WritableFile;
 class RandomRWFile;
 class Directory;
-struct Options;
+struct DBOptions;
 
 using std::unique_ptr;
 using std::shared_ptr;
@@ -47,7 +47,7 @@ struct EnvOptions {
   EnvOptions();
 
   // construct from Options
-  explicit EnvOptions(const Options& options);
+  explicit EnvOptions(const DBOptions& options);
 
   // If true, then allow caching of data in environment buffers
   bool use_os_buffer = true;
@@ -535,11 +535,11 @@ class Directory {
 };
 
 enum InfoLogLevel : unsigned char {
-  DEBUG = 0,
-  INFO,
-  WARN,
-  ERROR,
-  FATAL,
+  DEBUG_LEVEL = 0,
+  INFO_LEVEL,
+  WARN_LEVEL,
+  ERROR_LEVEL,
+  FATAL_LEVEL,
   NUM_INFO_LOG_LEVELS,
 };
 
@@ -547,7 +547,7 @@ enum InfoLogLevel : unsigned char {
 class Logger {
  public:
   enum { DO_NOT_SUPPORT_GET_LOG_FILE_SIZE = -1 };
-  explicit Logger(const InfoLogLevel log_level = InfoLogLevel::INFO)
+  explicit Logger(const InfoLogLevel log_level = InfoLogLevel::INFO_LEVEL)
       : log_level_(log_level) {}
   virtual ~Logger();
 
@@ -565,7 +565,7 @@ class Logger {
       return;
     }
 
-    if (log_level == INFO) {
+    if (log_level == InfoLogLevel::INFO_LEVEL) {
       // Doesn't print log level if it is INFO level.
       // This is to avoid unexpected performance regression after we add
       // the feature of log level. All the logs before we add the feature
@@ -649,7 +649,8 @@ extern void Fatal(Logger* info_log, const char* format, ...);
 
 // A utility routine: write "data" to the named file.
 extern Status WriteStringToFile(Env* env, const Slice& data,
-                                const std::string& fname);
+                                const std::string& fname,
+                                bool should_sync = false);
 
 // A utility routine: read contents of named file into *data
 extern Status ReadFileToString(Env* env, const std::string& fname,
@@ -759,6 +760,12 @@ class EnvWrapper : public Env {
  private:
   Env* target_;
 };
+
+// Returns a new environment that stores its data in memory and delegates
+// all non-file-storage tasks to base_env. The caller must delete the result
+// when it is no longer needed.
+// *base_env must remain live while the result is in use.
+Env* NewMemEnv(Env* base_env);
 
 }  // namespace rocksdb
 

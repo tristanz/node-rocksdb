@@ -83,6 +83,12 @@ extern rocksdb_t* rocksdb_open(
     const char* name,
     char** errptr);
 
+extern rocksdb_t* rocksdb_open_for_read_only(
+    const rocksdb_options_t* options,
+    const char* name,
+    unsigned char error_if_log_file_exist,
+    char** errptr);
+
 extern void rocksdb_close(rocksdb_t* db);
 
 extern void rocksdb_put(
@@ -463,13 +469,9 @@ extern void rocksdb_readoptions_set_verify_checksums(
     unsigned char);
 extern void rocksdb_readoptions_set_fill_cache(
     rocksdb_readoptions_t*, unsigned char);
-extern void rocksdb_readoptions_set_prefix_seek(
-    rocksdb_readoptions_t*, unsigned char);
 extern void rocksdb_readoptions_set_snapshot(
     rocksdb_readoptions_t*,
     const rocksdb_snapshot_t*);
-extern void rocksdb_readoptions_set_prefix(
-    rocksdb_readoptions_t*, const char* key, size_t keylen);
 extern void rocksdb_readoptions_set_read_tier(
     rocksdb_readoptions_t*, int);
 extern void rocksdb_readoptions_set_tailing(

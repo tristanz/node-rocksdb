@@ -3,6 +3,14 @@
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
 
+#ifndef GFLAGS
+#include <cstdio>
+int main() {
+  fprintf(stderr, "Please install gflags to run rocksdb tools\n");
+  return 1;
+}
+#else
+
 #include <gflags/gflags.h>
 
 #include "rocksdb/db.h"
@@ -18,7 +26,12 @@
 #include "util/testharness.h"
 #include "util/testutil.h"
 
+using GFLAGS::ParseCommandLineFlags;
+using GFLAGS::SetUsageMessage;
+
 namespace rocksdb {
+
+namespace {
 // Make a key that i determines the first 4 characters and j determines the
 // last 4 characters.
 static std::string MakeKey(int i, int j, bool through_db) {
@@ -43,6 +56,7 @@ static bool DummySaveValue(void* arg, const ParsedInternalKey& ikey,
 uint64_t Now(Env* env, bool measured_by_nanosecond) {
   return measured_by_nanosecond ? env->NowNanos() : env->NowMicros();
 }
+}  // namespace
 
 // A very simple benchmark that.
 // Create a table with roughly numKey1 * numKey2 keys,
@@ -57,14 +71,13 @@ uint64_t Now(Env* env, bool measured_by_nanosecond) {
 //
 // If for_terator=true, instead of just query one key each time, it queries
 // a range sharing the same prefix.
+namespace {
 void TableReaderBenchmark(Options& opts, EnvOptions& env_options,
                           ReadOptions& read_options, int num_keys1,
                           int num_keys2, int num_iter, int prefix_len,
                           bool if_query_empty_keys, bool for_iterator,
                           bool through_db, bool measured_by_nanosecond) {
   rocksdb::InternalKeyComparator ikc(opts.comparator);
-
-  Slice prefix = Slice();
 
   std::string file_name = test::TmpDir()
       + "/rocksdb_table_reader_benchmark";
@@ -152,10 +165,6 @@ void TableReaderBenchmark(Options& opts, EnvOptions& env_options,
           }
           std::string start_key = MakeKey(r1, r2, through_db);
           std::string end_key = MakeKey(r1, r2 + r2_len, through_db);
-          if (prefix_len < 16) {
-            prefix = Slice(start_key.data(), prefix_len);
-            read_options.prefix = &prefix;
-          }
           uint64_t total_time = 0;
           uint64_t start_time = Now(env, measured_by_nanosecond);
           port::MemoryBarrier();
@@ -215,6 +224,7 @@ void TableReaderBenchmark(Options& opts, EnvOptions& env_options,
     DestroyDB(dbname, opts);
   }
 }
+}  // namespace
 }  // namespace rocksdb
 
 DEFINE_bool(query_empty, false, "query non-existing keys instead of existing "
@@ -233,9 +243,9 @@ DEFINE_string(time_unit, "microsecond",
               "`microsecond` (default) or `nanosecond`");
 
 int main(int argc, char** argv) {
-  google::SetUsageMessage(std::string("\nUSAGE:\n") + std::string(argv[0]) +
-                          " [OPTIONS]...");
-  google::ParseCommandLineFlags(&argc, &argv, true);
+  SetUsageMessage(std::string("\nUSAGE:\n") + std::string(argv[0]) +
+                  " [OPTIONS]...");
+  ParseCommandLineFlags(&argc, &argv, true);
 
   rocksdb::TableFactory* tf = new rocksdb::BlockBasedTableFactory();
   rocksdb::Options options;
@@ -249,7 +259,6 @@ int main(int argc, char** argv) {
   options.compression = rocksdb::CompressionType::kNoCompression;
 
   if (FLAGS_plain_table) {
-    ro.prefix_seek = true;
     options.allow_mmap_reads = true;
     env_options.use_mmap_reads = true;
     tf = new rocksdb::PlainTableFactory(16, (FLAGS_prefix_len == 16) ? 0 : 8,
@@ -264,10 +273,12 @@ int main(int argc, char** argv) {
 
   options.table_factory =
       std::shared_ptr<rocksdb::TableFactory>(tf);
-  TableReaderBenchmark(options, env_options, ro, FLAGS_num_keys1,
-                       FLAGS_num_keys2, FLAGS_iter, FLAGS_prefix_len,
-                       FLAGS_query_empty, FLAGS_iterator, FLAGS_through_db,
-                       measured_by_nanosecond);
+  rocksdb::TableReaderBenchmark(options, env_options, ro, FLAGS_num_keys1,
+                                FLAGS_num_keys2, FLAGS_iter, FLAGS_prefix_len,
+                                FLAGS_query_empty, FLAGS_iterator,
+                                FLAGS_through_db, measured_by_nanosecond);
   delete tf;
   return 0;
 }
+
+#endif  // GFLAGS

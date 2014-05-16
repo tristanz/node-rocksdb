@@ -6,6 +6,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#ifndef ROCKSDB_LITE
 #pragma once
 #include "rocksdb/slice_transform.h"
 #include "rocksdb/memtablerep.h"
@@ -26,7 +27,7 @@ class HashSkipListRepFactory : public MemTableRepFactory {
 
   virtual MemTableRep* CreateMemTableRep(
       const MemTableRep::KeyComparator& compare, Arena* arena,
-      const SliceTransform* transform) override;
+      const SliceTransform* transform, Logger* logger) override;
 
   virtual const char* Name() const override {
     return "HashSkipListRepFactory";
@@ -39,3 +40,4 @@ class HashSkipListRepFactory : public MemTableRepFactory {
 };
 
 }
+#endif  // ROCKSDB_LITE

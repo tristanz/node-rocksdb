@@ -11,6 +11,7 @@
 
 #include <memory>
 #include <algorithm>
+#include <limits>
 
 #include "db/dbformat.h"
 #include "db/merge_context.h"
@@ -36,13 +37,14 @@ MemTable::MemTable(const InternalKeyComparator& cmp, const Options& options)
       kWriteBufferSize(options.write_buffer_size),
       arena_(options.arena_block_size),
       table_(options.memtable_factory->CreateMemTableRep(
-          comparator_, &arena_, options.prefix_extractor.get())),
+          comparator_, &arena_, options.prefix_extractor.get(),
+          options.info_log.get())),
+      num_entries_(0),
       flush_in_progress_(false),
       flush_completed_(false),
       file_number_(0),
       first_seqno_(0),
       mem_next_logfile_number_(0),
-      mem_logfile_number_(0),
       locks_(options.inplace_update_support ? options.inplace_update_num_locks
                                             : 0),
       prefix_extractor_(options.prefix_extractor.get()),
@@ -51,9 +53,11 @@ MemTable::MemTable(const InternalKeyComparator& cmp, const Options& options)
   // gone wrong already.
   assert(!should_flush_);
   if (prefix_extractor_ && options.memtable_prefix_bloom_bits > 0) {
-    prefix_bloom_.reset(new DynamicBloom(options.memtable_prefix_bloom_bits,
-                                         options.bloom_locality,
-                                         options.memtable_prefix_bloom_probes));
+    prefix_bloom_.reset(new DynamicBloom(
+        options.memtable_prefix_bloom_bits, options.bloom_locality,
+        options.memtable_prefix_bloom_probes, nullptr,
+        options.memtable_prefix_bloom_huge_page_tlb_size,
+        options.info_log.get()));
   }
 }
 
@@ -62,7 +66,16 @@ MemTable::~MemTable() {
 }
 
 size_t MemTable::ApproximateMemoryUsage() {
-  return arena_.ApproximateMemoryUsage() + table_->ApproximateMemoryUsage();
+  size_t arena_usage = arena_.ApproximateMemoryUsage();
+  size_t table_usage = table_->ApproximateMemoryUsage();
+  // let MAX_USAGE =  std::numeric_limits<size_t>::max()
+  // then if arena_usage + total_usage >= MAX_USAGE, return MAX_USAGE.
+  // the following variation is to avoid numeric overflow.
+  if (arena_usage >= std::numeric_limits<size_t>::max() - table_usage) {
+    return std::numeric_limits<size_t>::max();
+  }
+  // otherwise, return the actual usage
+  return arena_usage + table_usage;
 }
 
 bool MemTable::ShouldFlushNow() const {
@@ -159,14 +172,12 @@ const char* EncodeKey(std::string* scratch, const Slice& target) {
 
 class MemTableIterator: public Iterator {
  public:
-  MemTableIterator(const MemTable& mem, const ReadOptions& options)
+  MemTableIterator(const MemTable& mem, const ReadOptions& options,
+                   bool enforce_total_order)
       : bloom_(nullptr),
         prefix_extractor_(mem.prefix_extractor_),
-        iter_(),
         valid_(false) {
-    if (options.prefix) {
-      iter_.reset(mem.table_->GetPrefixIterator(*options.prefix));
-    } else if (options.prefix_seek) {
+    if (prefix_extractor_ != nullptr && !enforce_total_order) {
       bloom_ = mem.prefix_bloom_.get();
       iter_.reset(mem.table_->GetDynamicPrefixIterator());
     } else {
@@ -217,7 +228,7 @@ class MemTableIterator: public Iterator {
  private:
   DynamicBloom* bloom_;
   const SliceTransform* const prefix_extractor_;
-  std::shared_ptr<MemTableRep::Iterator> iter_;
+  std::unique_ptr<MemTableRep::Iterator> iter_;
   bool valid_;
 
   // No copying allowed
@@ -225,8 +236,9 @@ class MemTableIterator: public Iterator {
   void operator=(const MemTableIterator&);
 };
 
-Iterator* MemTable::NewIterator(const ReadOptions& options) {
-  return new MemTableIterator(*this, options);
+Iterator* MemTable::NewIterator(const ReadOptions& options,
+    bool enforce_total_order) {
+  return new MemTableIterator(*this, options, enforce_total_order);
 }
 
 port::RWMutex* MemTable::GetLock(const Slice& key) {
@@ -260,6 +272,7 @@ void MemTable::Add(SequenceNumber s, ValueType type,
   memcpy(p, value.data(), val_size);
   assert((unsigned)(p + val_size - buf) == (unsigned)encoded_len);
   table_->Insert(handle);
+  num_entries_++;
 
   if (prefix_bloom_) {
     assert(prefix_extractor_);
@@ -377,8 +390,7 @@ static bool SaveValue(void* arg, const char* entry) {
 
 bool MemTable::Get(const LookupKey& key, std::string* value, Status* s,
                    MergeContext& merge_context, const Options& options) {
-  StopWatchNano memtable_get_timer(options.env, false);
-  StartPerfTimer(&memtable_get_timer);
+  PERF_TIMER_AUTO(get_from_memtable_time);
 
   Slice user_key = key.user_key();
   bool found_final_value = false;
@@ -408,8 +420,8 @@ bool MemTable::Get(const LookupKey& key, std::string* value, Status* s,
   if (!found_final_value && merge_in_progress) {
     *s = Status::MergeInProgress("");
   }
-  BumpPerfTime(&perf_context.get_from_memtable_time, &memtable_get_timer);
-  BumpPerfCount(&perf_context.get_from_memtable_count);
+  PERF_TIMER_STOP(get_from_memtable_time);
+  PERF_COUNTER_ADD(get_from_memtable_count, 1);
   return found_final_value;
 }
 
@@ -478,7 +490,7 @@ bool MemTable::UpdateCallback(SequenceNumber seq,
   LookupKey lkey(key, seq);
   Slice memkey = lkey.memtable_key();
 
-  std::shared_ptr<MemTableRep::Iterator> iter(
+  std::unique_ptr<MemTableRep::Iterator> iter(
     table_->GetIterator(lkey.user_key()));
   iter->Seek(lkey.internal_key(), memkey.data());
 

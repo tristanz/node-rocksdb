@@ -3,6 +3,14 @@
 //  LICENSE file in the root directory of this source tree. An additional grant
 //  of patent rights can be found in the PATENTS file in the same directory.
 
+#ifndef GFLAGS
+#include <cstdio>
+int main() {
+  fprintf(stderr, "Please install gflags to run rocksdb tools\n");
+  return 1;
+}
+#else
+
 #include <gflags/gflags.h>
 
 #include "rocksdb/env.h"
@@ -10,9 +18,12 @@
 #include "util/testharness.h"
 #include "util/testutil.h"
 
+using GFLAGS::ParseCommandLineFlags;
+using GFLAGS::SetUsageMessage;
+
 // A simple benchmark to simulate transactional logs
 
-DEFINE_int32(num_records, 6000, "Size of each record.");
+DEFINE_int32(num_records, 6000, "Number of records.");
 DEFINE_int32(record_size, 249, "Size of each record.");
 DEFINE_int32(record_interval, 10000, "Interval between records (microSec)");
 DEFINE_int32(bytes_per_sync, 0, "bytes_per_sync parameter in EnvOptions");
@@ -20,7 +31,7 @@ DEFINE_bool(enable_sync, false, "sync after each write.");
 
 namespace rocksdb {
 void RunBenchmark() {
-  std::string file_name = test::TmpDir() + "/log_write_bench.log";
+  std::string file_name = test::TmpDir() + "/log_write_benchmark.log";
   Env* env = Env::Default();
   EnvOptions env_options;
   env_options.use_mmap_writes = false;
@@ -60,10 +71,12 @@ void RunBenchmark() {
 }  // namespace rocksdb
 
 int main(int argc, char** argv) {
-  google::SetUsageMessage(std::string("\nUSAGE:\n") + std::string(argv[0]) +
-                          " [OPTIONS]...");
-  google::ParseCommandLineFlags(&argc, &argv, true);
+  SetUsageMessage(std::string("\nUSAGE:\n") + std::string(argv[0]) +
+                  " [OPTIONS]...");
+  ParseCommandLineFlags(&argc, &argv, true);
 
   rocksdb::RunBenchmark();
   return 0;
 }
+
+#endif  // GFLAGS

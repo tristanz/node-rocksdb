@@ -145,7 +145,7 @@ static char* FilterCreate(
   memcpy(result, "fake", 4);
   return result;
 }
-unsigned char FilterKeyMatch(
+static unsigned char FilterKeyMatch(
     void* arg,
     const char* key, size_t length,
     const char* filter, size_t filter_length) {
@@ -460,8 +460,6 @@ int main(int argc, char** argv) {
     CheckNoError(err);
     rocksdb_put(db, woptions, "bar3", 4, "bar", 3, &err);
     CheckNoError(err);
-
-    rocksdb_readoptions_set_prefix_seek(roptions, 1);
 
     rocksdb_iterator_t* iter = rocksdb_create_iterator(db, roptions);
     CheckCondition(!rocksdb_iter_valid(iter));

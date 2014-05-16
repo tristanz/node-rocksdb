@@ -14,7 +14,7 @@
 #include "utilities/merge_operators.h"
 #include "utilities/merge_operators/string_append/stringappend.h"
 #include "utilities/merge_operators/string_append/stringappend2.h"
-#include "utilities/ttl/db_ttl.h"
+#include "utilities/db_ttl.h"
 #include "util/testharness.h"
 #include "util/random.h"
 
@@ -25,6 +25,7 @@ namespace rocksdb {
 // Path to the database on file system
 const std::string kDbName = "/tmp/mergetestdb";
 
+namespace {
 // OpenDb opens a (possibly new) rocksdb database with a StringAppendOperator
 std::shared_ptr<DB> OpenNormalDb(char delim_char) {
   DB* db;
@@ -37,13 +38,14 @@ std::shared_ptr<DB> OpenNormalDb(char delim_char) {
 
 // Open a TtlDB with a non-associative StringAppendTESTOperator
 std::shared_ptr<DB> OpenTtlDb(char delim_char) {
-  StackableDB* db;
+  DBWithTTL* db;
   Options options;
   options.create_if_missing = true;
   options.merge_operator.reset(new StringAppendTESTOperator(delim_char));
-  ASSERT_OK(UtilityDB::OpenTtlDB(options, kDbName, &db, 123456));
+  ASSERT_OK(DBWithTTL::Open(options, kDbName, &db, 123456));
   return std::shared_ptr<DB>(db);
 }
+}  // namespace
 
 /// StringLists represents a set of string-lists, each with a key-index.
 /// Supports Append(list, string) and Get(list)

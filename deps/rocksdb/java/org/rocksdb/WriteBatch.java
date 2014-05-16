@@ -5,7 +5,6 @@
 
 package org.rocksdb;
 
-import java.lang.*;
 import java.util.*;
 
 /**
@@ -25,9 +24,9 @@ import java.util.*;
  * non-const method, all threads accessing the same WriteBatch must use
  * external synchronization.
  */
-public class WriteBatch {
+public class WriteBatch extends RocksObject {
   public WriteBatch() {
-    nativeHandle_ = 0;
+    super();
     newWriteBatch(0);
   }
 
@@ -87,14 +86,10 @@ public class WriteBatch {
   /**
    * Delete the c++ side pointer.
    */
-  public synchronized void dispose() {
-    if (nativeHandle_ != 0) {
+  @Override public synchronized void dispose() {
+    if (isInitialized()) {
       dispose0();
     }
-  }
-
-  @Override protected void finalize() {
-    dispose();
   }
 
   private native void newWriteBatch(int reserved_bytes);
@@ -105,8 +100,6 @@ public class WriteBatch {
   private native void remove(byte[] key, int keyLen);
   private native void putLogData(byte[] blob, int blobLen);
   private native void dispose0();
-
-  private long nativeHandle_;
 }
 
 /**
@@ -118,4 +111,3 @@ class WriteBatchInternal {
   static native long sequence(WriteBatch batch);
   static native void append(WriteBatch b1, WriteBatch b2);
 }
-

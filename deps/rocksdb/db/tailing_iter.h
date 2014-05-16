@@ -4,6 +4,8 @@
 //  of patent rights can be found in the PATENTS file in the same directory.
 #pragma once
 
+#ifndef ROCKSDB_LITE
+
 #include <string>
 
 #include "rocksdb/db.h"
@@ -13,6 +15,9 @@
 namespace rocksdb {
 
 class DBImpl;
+class Env;
+struct SuperVersion;
+class ColumnFamilyData;
 
 /**
  * TailingIterator is a special type of iterator that doesn't use an (implicit)
@@ -24,9 +29,9 @@ class DBImpl;
  */
 class TailingIterator : public Iterator {
  public:
-  TailingIterator(DBImpl* db, const ReadOptions& options,
-                  const Comparator* comparator);
-  virtual ~TailingIterator() {}
+  TailingIterator(Env* const env, DBImpl* db, const ReadOptions& read_options,
+                  ColumnFamilyData* cfd);
+  virtual ~TailingIterator();
 
   virtual bool Valid() const override;
   virtual void SeekToFirst() override;
@@ -39,10 +44,13 @@ class TailingIterator : public Iterator {
   virtual Status status() const override;
 
  private:
+  void Cleanup();
+
+  Env* const env_;
   DBImpl* const db_;
-  const ReadOptions options_;
-  const Comparator* const comparator_;
-  uint64_t version_number_;
+  const ReadOptions read_options_;
+  ColumnFamilyData* const cfd_;
+  SuperVersion* super_version_;
 
   // TailingIterator merges the contents of the two iterators below (one using
   // mutable memtable contents only, other over SSTs and immutable memtables).
@@ -72,7 +80,7 @@ class TailingIterator : public Iterator {
   bool IsCurrentVersion() const;
 
   // check if SeekImmutable() is needed due to target having a different prefix
-  // than prev_key_ (used when options.prefix_seek is set)
+  // than prev_key_ (used when in prefix seek mode)
   bool IsSamePrefix(const Slice& target) const;
 
   // creates mutable_ and immutable_ iterators and updates version_number_
@@ -86,3 +94,4 @@ class TailingIterator : public Iterator {
 };
 
 }  // namespace rocksdb
+#endif  // ROCKSDB_LITE

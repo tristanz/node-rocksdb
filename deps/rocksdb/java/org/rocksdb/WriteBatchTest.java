@@ -9,7 +9,6 @@
 package org.rocksdb;
 
 import java.util.*;
-import java.lang.*;
 import java.io.UnsupportedEncodingException;
 
 /**
@@ -17,7 +16,7 @@ import java.io.UnsupportedEncodingException;
  */
 public class WriteBatchTest {
   static {
-    System.loadLibrary("rocksdbjni");
+    RocksDB.loadLibrary();
   }
 
   public static void main(String args[]) {
