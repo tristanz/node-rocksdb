@@ -26,5 +26,6 @@
   },
   "devDependencies": {
     "mocha": "^1.18.2"
-  }
+  },
+  "unsafe-perm": true
 }
