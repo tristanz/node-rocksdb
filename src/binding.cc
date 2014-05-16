@@ -36,7 +36,7 @@ Handle<Value> Method(const Arguments& args) {
 
   delete db;
 
-  return scope.Close(String::New("sdf"));
+  return scope.Close(String::New("world"));
 }
 
 void init(Handle<Object> exports) {
