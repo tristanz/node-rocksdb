@@ -10,7 +10,7 @@
         "OTHER_CPLUSPLUSFLAGS" : ["-std=c++11", "-stdlib=libc++"],
         "OTHER_LDFLAGS": ["-stdlib=libc++"]
       },
-      "cflags": ["-std=c++11", "-stdlib=libc++"]
+      "cflags": ["-std=c++11"]
     }
   ]
 }
