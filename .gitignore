@@ -6,6 +6,6 @@ pids
 lib-cov
 coverage
 .grunt
-build/Release
+build
 node_modules
 .DS_Store

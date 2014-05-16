@@ -1,0 +1,25 @@
+{
+  "name": "node-rocksdb",
+  "version": "0.1.0",
+  "description": "A RocksDB wrapper for Node.js that exposes the full RocksDB API.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "preinstall": "cd deps/rocksdb; make static_lib; cd ../..",
+    "install": "node-gyp rebuild"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/tristanz/node-rocksdb.git"
+  },
+  "keywords": ["rocksdb"],
+  "author": "Tristan Zajonc",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/tristanz/node-rocksdb/issues"
+  },
+  "homepage": "https://github.com/tristanz/node-rocksdb",
+  "dependencies": {
+    "bindings": "^1.2.0"
+  }
+}
